@@ -1,54 +1,112 @@
-# 项目上下文
+# 会议助手 - 项目规范文档
 
-### 版本技术栈
+## 项目概览
 
-- **Framework**: Next.js 16 (App Router)
-- **Core**: React 19
-- **Language**: TypeScript 5
-- **UI 组件**: shadcn/ui (基于 Radix UI)
-- **Styling**: Tailwind CSS 4
+**项目名称**: 会议助手  
+**项目类型**: 跨平台 Web 应用（支持电脑、手机、平板）  
+**核心功能**: 会议录音 → 实时转文字 → 词云分析
+
+## 技术栈
+
+| 技术 | 说明 |
+|------|------|
+| Framework | Next.js 16 (App Router) |
+| Core | React 19 |
+| Language | TypeScript 5 |
+| UI 组件 | shadcn/ui + Tailwind CSS |
+| 录音 | MediaRecorder API |
+| 语音转文字 | Web Speech API (SpeechRecognition) |
+| 静默检测 | Web Audio API (AudioContext) |
+| 词云 | echarts-wordcloud |
+
+## 核心功能流程
+
+```
+┌──────────────────────────────────────────────────────┐
+│                    用户点击"会议开始"                    │
+└─────────────────────────┬────────────────────────────┘
+                          ▼
+┌──────────────────────────────────────────────────────┐
+│                  麦克风开始持续录音                       │
+│  • 实时音频能量监测                                     │
+│  • Web Speech API 实时转写                             │
+│  • 静默检测：30分钟无声音自动停止                         │
+└─────────────────────────┬────────────────────────────┘
+                          ▼
+┌──────────────────────────────────────────────────────┐
+│                  用户点击"生成词云"                      │
+└─────────────────────────┬────────────────────────────┘
+                          ▼
+┌──────────────────────────────────────────────────────┐
+│            合并所有文字片段 → 绿色椭圆词云               │
+└──────────────────────────────────────────────────────┘
+```
+
+## 构建和测试命令
+
+```bash
+# 安装依赖
+pnpm install
+
+# 开发环境启动
+pnpm dev
+
+# 构建生产版本
+pnpm build
+
+# 代码检查
+pnpm lint
+
+# 类型检查
+pnpm ts-check
+```
 
 ## 目录结构
 
 ```
-├── public/                 # 静态资源
-├── scripts/                # 构建与启动脚本
-│   ├── build.sh            # 构建脚本
-│   ├── dev.sh              # 开发环境启动脚本
-│   ├── prepare.sh          # 预处理脚本
-│   └── start.sh            # 生产环境启动脚本
-├── src/
-│   ├── app/                # 页面路由与布局
-│   ├── components/ui/      # Shadcn UI 组件库
-│   ├── hooks/              # 自定义 Hooks
-│   ├── lib/                # 工具库
-│   │   └── utils.ts        # 通用工具函数 (cn)
-│   └── server.ts           # 自定义服务端入口
-├── next.config.ts          # Next.js 配置
-├── package.json            # 项目依赖管理
-└── tsconfig.json           # TypeScript 配置
+src/
+├── app/
+│   ├── page.tsx              # 主页面
+│   ├── layout.tsx            # 布局组件
+│   └── globals.css           # 全局样式（绿色主题）
+├── components/
+│   ├── MeetingRecorder.tsx   # 录音组件（核心）
+│   ├── TranscriptView.tsx    # 转写预览组件
+│   └── WordCloud.tsx         # 词云组件
+├── hooks/
+│   ├── useSpeechRecognition.ts  # 语音识别 hook
+│   └── useSilenceDetection.ts   # 静默检测 hook
+└── lib/
+    └── utils.ts              # 工具函数
 ```
 
-- 项目文件（如 app 目录、pages 目录、components 等）默认初始化到 `src/` 目录下。
+## 关键配置
 
-## 包管理规范
+### 静默检测配置
+- 能量阈值: `0.02`
+- 最大静默时间: `30分钟 (1800000ms)`
 
-**仅允许使用 pnpm** 作为包管理器，**严禁使用 npm 或 yarn**。
-**常用命令**：
-- 安装依赖：`pnpm add <package>`
-- 安装开发依赖：`pnpm add -D <package>`
-- 安装所有依赖：`pnpm install`
-- 移除依赖：`pnpm remove <package>`
+### 语音识别配置
+- 语言: `zh-CN` (中文)
+- 持续识别: `true`
+- 音频采样率: `16000Hz`
 
-## 开发规范
+### 词云配置
+- 形状: 椭圆 (ellipse)
+- 主题色: 绿色系 (#22c55e → #15803d)
+- 最大关键词数: 100
 
-- **项目理解加速**：初始可以依赖项目下`package.json`文件理解项目类型，如果没有或无法理解退化成阅读其他文件。
-- **Hydration 错误预防**：严禁在 JSX 渲染逻辑中直接使用 typeof window、Date.now()、Math.random() 等动态数据。必须使用 'use client' 并配合 useEffect + useState 确保动态内容仅在客户端挂载后渲染；同时严禁非法 HTML 嵌套（如 <p> 嵌套 <div>）。
+## 响应式适配
 
+| 设备 | 布局 | 字云尺寸 |
+|------|------|---------|
+| 手机 (< 640px) | 单列，垂直堆叠 | 100% 宽度 |
+| 平板 (640-1024px) | 单列，保持比例 | 100% 宽度 |
+| 电脑 (> 1024px) | 双栏，左录音右预览 | 固定高度 400px |
 
-## UI 设计与组件规范 (UI & Styling Standards)
+## 注意事项
 
-- 模板默认预装核心组件库 `shadcn/ui`，位于`src/components/ui/`目录下
-- Next.js 项目**必须默认**采用 shadcn/ui 组件、风格和规范，**除非用户指定用其他的组件和规范。**
-
-
+1. **浏览器兼容性**: Web Speech API 仅在 Chrome、Safari、Edge 等现代浏览器中可用
+2. **HTTPS 要求**: 录音功能需要在安全上下文 (HTTPS) 下运行
+3. **麦克风权限**: 用户首次使用时需要授权麦克风访问权限
+4. **中文支持**: 系统已配置中文停用词过滤，提供更准确的词云分析

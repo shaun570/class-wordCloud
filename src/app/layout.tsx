@@ -4,32 +4,28 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: {
-    default: '新应用 | 扣子编程',
-    template: '%s | 扣子编程',
+    default: '会议助手 | 智能录音转文字，词云分析',
+    template: '%s | 会议助手',
   },
   description:
-    '扣子编程是一款一站式云端 Vibe Coding 开发平台。通过对话轻松构建智能体、工作流和网站，实现从创意到上线的无缝衔接。',
+    '会议助手是一款智能会议记录工具，支持实时录音转文字，自动检测静默，生成词云分析，让会议内容一目了然。',
   keywords: [
-    '扣子编程',
-    'Coze Code',
-    'Vibe Coding',
-    'AI 编程',
-    '智能体搭建',
-    '工作流搭建',
-    '网站搭建',
-    '网站部署',
-    '全栈开发',
-    'AI 工程师',
+    '会议助手',
+    '录音转文字',
+    '语音转文字',
+    '会议记录',
+    '词云生成',
+    '会议分析',
   ],
-  authors: [{ name: 'Coze Code Team', url: 'https://code.coze.cn' }],
+  authors: [{ name: 'Meeting Assistant' }],
   generator: 'Coze Code',
   // icons: {
   //   icon: '',
   // },
   openGraph: {
-    title: '扣子编程 | 你的 AI 工程师已就位',
+    title: '会议助手 | 智能录音转文字，词云分析',
     description:
-      '我正在使用扣子编程 Vibe Coding，让创意瞬间上线。告别拖拽，拥抱心流。',
+      '会议助手是一款智能会议记录工具，支持实时录音转文字，自动检测静默，生成词云分析。',
     url: 'https://code.coze.cn',
     siteName: '扣子编程',
     locale: 'zh_CN',

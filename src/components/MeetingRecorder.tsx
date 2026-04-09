@@ -34,6 +34,10 @@ export function MeetingRecorder({ onTranscriptChange, onAutoStop }: MeetingRecor
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const silenceStartRef = useRef<number | null>(null);
+  
+  // Keep-alive audio references
+  const keepAliveSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const keepAliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Refs for callbacks to avoid circular dependency
   const stopListeningRef = useRef<(() => void) | null>(null);
@@ -71,8 +75,56 @@ export function MeetingRecorder({ onTranscriptChange, onAutoStop }: MeetingRecor
     onTranscriptChange?.(fullTranscript);
   }, [fullTranscript, onTranscriptChange]);
 
+  // Keep page alive by playing silent audio periodically
+  const startKeepAlive = useCallback((audioContext: AudioContext) => {
+    // Create a short silent buffer (1 second of silence)
+    const bufferSize = audioContext.sampleRate * 1;
+    const silentBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+    const output = silentBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      output[i] = 0; // Silent
+    }
+
+    // Play silent audio every 2 seconds to keep AudioContext alive
+    const playSilentAudio = () => {
+      if (!audioContextRef.current || audioContextRef.current.state === 'closed') return;
+      
+      try {
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = silentBuffer;
+        source.connect(audioContextRef.current.destination);
+        source.start();
+        keepAliveSourceRef.current = source;
+      } catch (e) {
+        console.warn('Keep-alive audio error:', e);
+      }
+    };
+
+    // Play immediately and then every 2 seconds
+    playSilentAudio();
+    keepAliveIntervalRef.current = setInterval(playSilentAudio, 2000);
+  }, []);
+
+  const stopKeepAlive = useCallback(() => {
+    if (keepAliveSourceRef.current) {
+      try {
+        keepAliveSourceRef.current.stop();
+      } catch {
+        // Ignore if already stopped
+      }
+      keepAliveSourceRef.current = null;
+    }
+    if (keepAliveIntervalRef.current) {
+      clearInterval(keepAliveIntervalRef.current);
+      keepAliveIntervalRef.current = null;
+    }
+  }, []);
+
   // Stop recording function - stored in ref for recursive access
   const stopRecording = useCallback(() => {
+    // Stop keep-alive audio
+    stopKeepAlive();
+
     // Stop media recorder
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
@@ -111,7 +163,7 @@ export function MeetingRecorder({ onTranscriptChange, onAutoStop }: MeetingRecor
     setAudioLevel(0);
     setIsSilent(false);
     setSilenceDuration(0);
-  }, []);
+  }, [stopKeepAlive]);
 
   // Keep stopRecording ref updated
   useEffect(() => {
@@ -140,6 +192,9 @@ export function MeetingRecorder({ onTranscriptChange, onAutoStop }: MeetingRecor
       analyser.fftSize = 256;
       source.connect(analyser);
       analyserRef.current = analyser;
+
+      // Start keep-alive silent audio to prevent browser from sleeping
+      startKeepAlive(audioContext);
 
       // Start media recorder
       const mediaRecorder = new MediaRecorder(stream, {
@@ -206,7 +261,7 @@ export function MeetingRecorder({ onTranscriptChange, onAutoStop }: MeetingRecor
       console.error('Failed to start recording:', error);
       setStatus('idle');
     }
-  }, [startListening, status]);
+  }, [startListening, startKeepAlive, status]);
 
   const resetRecording = useCallback(() => {
     setSegments([]);
@@ -214,6 +269,13 @@ export function MeetingRecorder({ onTranscriptChange, onAutoStop }: MeetingRecor
     resetTranscript();
     setStatus('idle');
   }, [resetTranscript]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopKeepAlive();
+    };
+  }, [stopKeepAlive]);
 
   // Format time as HH:MM:SS
   const formatTime = (seconds: number): string => {

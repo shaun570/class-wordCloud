@@ -1,16 +1,16 @@
 'use client';
 
-import dynamic from 'next/dynamic';
 import { useState, useCallback } from 'react';
 import { MeetingRecorder } from '@/components/MeetingRecorder';
 import { TranscriptView } from '@/components/TranscriptView';
+import dynamic from 'next/dynamic';
 import { Button } from '@/components/ui/button';
 import { Cloud } from 'lucide-react';
 
 // Dynamically import WordCloud to avoid SSR issues with echarts
 const WordCloud = dynamic(
   () => import('@/components/WordCloud').then((mod) => mod.WordCloud),
-  { 
+  {
     ssr: false,
     loading: () => (
       <div className="flex items-center justify-center h-[400px]">
@@ -20,35 +20,54 @@ const WordCloud = dynamic(
   }
 );
 
+interface ProcessedResult {
+  word: string;
+  weight: number;
+  source?: 'llm' | 'fallback';
+}
+
 type AppStatus = 'recording' | 'generating' | 'completed';
 
 export default function HomePage() {
   const [status, setStatus] = useState<AppStatus>('recording');
   const [transcript, setTranscript] = useState('');
+  const [processedResults, setProcessedResults] = useState<ProcessedResult[]>([]);
   const [showWordCloud, setShowWordCloud] = useState(false);
+  const [progress, setProgress] = useState({ completed: 0, processing: 0, pending: 0, failed: 0 });
 
   const handleTranscriptChange = useCallback((fullTranscript: string) => {
     setTranscript(fullTranscript);
   }, []);
 
+  const handleProcessedResultsChange = useCallback((results: ProcessedResult[]) => {
+    setProcessedResults(results);
+  }, []);
+
+  const handleProgressUpdate = useCallback((newProgress: { completed: number; processing: number; pending: number; failed: number }) => {
+    setProgress(newProgress);
+  }, []);
+
   const handleAutoStop = useCallback(() => {
-    // Auto-stop triggered by silence detection
     setStatus('completed');
     setShowWordCloud(true);
   }, []);
 
   const handleGenerateWordCloud = useCallback(() => {
-    if (transcript.length > 0) {
+    if (processedResults.length > 0 || transcript.length > 0) {
       setStatus('generating');
       setShowWordCloud(true);
     }
-  }, [transcript]);
+  }, [processedResults, transcript]);
 
   const handleReset = useCallback(() => {
     setStatus('recording');
     setTranscript('');
+    setProcessedResults([]);
     setShowWordCloud(false);
+    setProgress({ completed: 0, processing: 0, pending: 0, failed: 0 });
   }, []);
+
+  const hasContent = processedResults.length > 0 || transcript.length > 0;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-green-50 to-white">
@@ -74,11 +93,28 @@ export default function HomePage() {
           {/* Recorder Card */}
           <MeetingRecorder
             onTranscriptChange={handleTranscriptChange}
+            onProcessedResultsChange={handleProcessedResultsChange}
+            onProgressUpdate={handleProgressUpdate}
             onAutoStop={handleAutoStop}
           />
 
+          {/* Progress Indicator (Mobile) */}
+          {(progress.completed > 0 || progress.pending > 0) && (
+            <div className="bg-white rounded-lg p-3 border border-green-100">
+              <div className="text-sm">
+                <span className="text-green-600">已处理: {progress.completed} 片段</span>
+                {progress.pending > 0 && (
+                  <span className="text-orange-500 ml-3">待处理: {progress.pending} 片段</span>
+                )}
+                {progress.failed > 0 && (
+                  <span className="text-red-500 ml-3">失败: {progress.failed} 片段</span>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Generate Button (Mobile) */}
-          {status === 'recording' && transcript.length > 10 && (
+          {status === 'recording' && hasContent && (
             <Button
               onClick={handleGenerateWordCloud}
               size="lg"
@@ -97,7 +133,10 @@ export default function HomePage() {
 
           {/* Word Cloud */}
           {showWordCloud && (
-            <WordCloud transcript={transcript} onReset={handleReset} />
+            <WordCloud
+              processedResults={processedResults}
+              onReset={handleReset}
+            />
           )}
         </div>
 
@@ -107,11 +146,28 @@ export default function HomePage() {
           <div className="space-y-4 flex flex-col">
             <MeetingRecorder
               onTranscriptChange={handleTranscriptChange}
+              onProcessedResultsChange={handleProcessedResultsChange}
+              onProgressUpdate={handleProgressUpdate}
               onAutoStop={handleAutoStop}
             />
 
+            {/* Progress Indicator (Desktop) */}
+            {(progress.completed > 0 || progress.pending > 0) && (
+              <div className="bg-white rounded-lg p-3 border border-green-100">
+                <div className="text-sm">
+                  <span className="text-green-600">已处理: {progress.completed} 片段</span>
+                  {progress.pending > 0 && (
+                    <span className="text-orange-500 ml-3">待处理: {progress.pending} 片段</span>
+                  )}
+                  {progress.failed > 0 && (
+                    <span className="text-red-500 ml-3">失败: {progress.failed} 片段</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Generate Button (Desktop) */}
-            {status === 'recording' && transcript.length > 10 && (
+            {status === 'recording' && hasContent && (
               <Button
                 onClick={handleGenerateWordCloud}
                 size="lg"
@@ -133,7 +189,10 @@ export default function HomePage() {
           {/* Right Column */}
           <div className="flex flex-col">
             {showWordCloud ? (
-              <WordCloud transcript={transcript} onReset={handleReset} />
+              <WordCloud
+                processedResults={processedResults}
+                onReset={handleReset}
+              />
             ) : (
               <div className="flex-1 flex items-center justify-center bg-white rounded-lg border-2 border-dashed border-green-200">
                 <div className="text-center">
@@ -142,6 +201,9 @@ export default function HomePage() {
                     {status === 'recording'
                       ? '开始会议后点击"生成词云"查看分析结果'
                       : '点击上方"会议开始"开始录制'}
+                  </p>
+                  <p className="text-sm text-green-400 mt-2">
+                    支持最多2小时录音，自动后台处理
                   </p>
                 </div>
               </div>

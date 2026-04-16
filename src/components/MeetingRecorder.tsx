@@ -1,283 +1,333 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Mic, MicOff, Square, Loader2 } from 'lucide-react';
+import { Mic, MicOff, Square, Loader2, CheckCircle, AlertCircle, XCircle } from 'lucide-react';
 
-interface TranscriptSegment {
-  id: string;
-  text: string;
-  timestamp: number;
+interface AudioChunk {
+  id: number;
+  blob: Blob;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  transcript?: string;
+  words?: { word: string; weight: number }[];
+  retryCount?: number;
+}
+
+interface ProcessedResult {
+  word: string;
+  weight: number;
+  source: 'llm' | 'fallback';
 }
 
 interface MeetingRecorderProps {
   onTranscriptChange?: (fullTranscript: string) => void;
+  onProcessedResultsChange?: (results: ProcessedResult[]) => void;
   onAutoStop?: () => void;
+  onProgressUpdate?: (progress: { completed: number; processing: number; pending: number; failed: number }) => void;
 }
 
 type RecordingStatus = 'idle' | 'requesting' | 'recording' | 'stopped';
 
-export function MeetingRecorder({ onTranscriptChange, onAutoStop }: MeetingRecorderProps) {
+const CHUNK_DURATION_MS = 3 * 60 * 1000; // 3 minutes
+const MAX_RECORDING_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+export function MeetingRecorder({
+  onTranscriptChange,
+  onProcessedResultsChange,
+  onAutoStop,
+  onProgressUpdate,
+}: MeetingRecorderProps) {
   const [status, setStatus] = useState<RecordingStatus>('idle');
   const [elapsedTime, setElapsedTime] = useState(0);
-  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
-  const [audioLevel, setAudioLevel] = useState(0);
-  const [isSilent, setIsSilent] = useState(false);
-  const [silenceDuration, setSilenceDuration] = useState(0);
+  const [chunks, setChunks] = useState<AudioChunk[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
 
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
-  const silenceStartRef = useRef<number | null>(null);
-  
-  // Keep-alive audio references
-  const keepAliveSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const chunkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const keepAliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const silenceStartRef = useRef<number | null>(null);
+  const processingRef = useRef<Set<number>>(new Set());
+  const chunkIdCounterRef = useRef(0);
 
-  // Refs for callbacks to avoid circular dependency
-  const stopListeningRef = useRef<(() => void) | null>(null);
-  const autoStopCallbackRef = useRef(onAutoStop);
-  const stopRecordingFnRef = useRef<(() => void) | null>(null);
-
-  const fullTranscript = segments.map((s) => s.text).join('');
-
-  const { isSupported, startListening, stopListening, resetTranscript } =
-    useSpeechRecognition({
-      language: 'zh-CN',
-      continuous: true,
-      onResult: (text, isFinal) => {
-        if (isFinal && text.trim()) {
-          setSegments((prev) => [
-            ...prev,
-            {
-              id: `${Date.now()}-${Math.random()}`,
-              text: text,
-              timestamp: Date.now(),
-            },
-          ]);
-        }
-      },
-    });
-
-  // Keep refs updated
-  useEffect(() => {
-    stopListeningRef.current = stopListening;
-    autoStopCallbackRef.current = onAutoStop;
-  }, [stopListening, onAutoStop]);
-
-  // Update parent when transcript changes
-  useEffect(() => {
-    onTranscriptChange?.(fullTranscript);
-  }, [fullTranscript, onTranscriptChange]);
+  const fullTranscript = chunks
+    .filter((c) => c.status === 'completed' && c.transcript)
+    .map((c) => c.transcript!)
+    .join('');
 
   // Keep page alive by playing silent audio periodically
-  const startKeepAlive = useCallback((audioContext: AudioContext) => {
-    // Create a short silent buffer (1 second of silence)
+  const startKeepAlive = useCallback(() => {
+    const audioContext = new AudioContext();
     const bufferSize = audioContext.sampleRate * 1;
     const silentBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
     const output = silentBuffer.getChannelData(0);
     for (let i = 0; i < bufferSize; i++) {
-      output[i] = 0; // Silent
+      output[i] = 0;
     }
 
-    // Play silent audio every 2 seconds to keep AudioContext alive
     const playSilentAudio = () => {
-      if (!audioContextRef.current || audioContextRef.current.state === 'closed') return;
-      
+      if (!audioContext || audioContext.state === 'closed') return;
       try {
-        const source = audioContextRef.current.createBufferSource();
+        const source = audioContext.createBufferSource();
         source.buffer = silentBuffer;
-        source.connect(audioContextRef.current.destination);
+        source.connect(audioContext.destination);
         source.start();
-        keepAliveSourceRef.current = source;
-      } catch (e) {
-        console.warn('Keep-alive audio error:', e);
+      } catch {
+        // Ignore
       }
     };
 
-    // Play immediately and then every 2 seconds
     playSilentAudio();
     keepAliveIntervalRef.current = setInterval(playSilentAudio, 2000);
   }, []);
 
   const stopKeepAlive = useCallback(() => {
-    if (keepAliveSourceRef.current) {
-      try {
-        keepAliveSourceRef.current.stop();
-      } catch {
-        // Ignore if already stopped
-      }
-      keepAliveSourceRef.current = null;
-    }
     if (keepAliveIntervalRef.current) {
       clearInterval(keepAliveIntervalRef.current);
       keepAliveIntervalRef.current = null;
     }
   }, []);
 
-  // Stop recording function - stored in ref for recursive access
-  const stopRecording = useCallback(() => {
-    // Stop keep-alive audio
-    stopKeepAlive();
+  // Process a single chunk through ASR and LLM
+  const processChunk = useCallback(async (chunk: AudioChunk) => {
+    if (processingRef.current.has(chunk.id)) return;
+    processingRef.current.add(chunk.id);
 
-    // Stop media recorder
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+    try {
+      // Step 1: ASR transcription
+      const formData = new FormData();
+      formData.append('audio', chunk.blob, `chunk-${chunk.id}.webm`);
+      formData.append('chunkId', String(chunk.id));
+
+      const transcribeResponse = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!transcribeResponse.ok) {
+        throw new Error('Transcription failed');
+      }
+
+      const { text: transcript } = await transcribeResponse.json();
+
+      // Step 2: LLM word analysis
+      const analyzeResponse = await fetch('/api/analyze-words', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: transcript, chunkId: chunk.id }),
+      });
+
+      if (!analyzeResponse.ok) {
+        throw new Error('Word analysis failed');
+      }
+
+      const { words } = await analyzeResponse.json();
+
+      // Update chunk status
+      setChunks((prev) =>
+        prev.map((c) =>
+          c.id === chunk.id
+            ? { ...c, status: 'completed', transcript, words }
+            : c
+        )
+      );
+    } catch (error) {
+      console.error(`Chunk ${chunk.id} processing failed:`, error);
+
+      // Retry once
+      if ((chunk.retryCount || 0) < 1) {
+        setChunks((prev) =>
+          prev.map((c) =>
+            c.id === chunk.id
+              ? { ...c, status: 'pending', retryCount: (c.retryCount || 0) + 1 }
+              : c
+          )
+        );
+        // Retry after 2 seconds
+        setTimeout(() => processChunk({ ...chunk, retryCount: (chunk.retryCount || 0) + 1 }), 2000);
+      } else {
+        // Give up, mark as failed
+        setChunks((prev) =>
+          prev.map((c) =>
+            c.id === chunk.id ? { ...c, status: 'failed' } : c
+          )
+        );
+        setWarnings((prev) => [...prev, `片段 ${chunk.id} 处理失败，已跳过`]);
+      }
+    } finally {
+      processingRef.current.delete(chunk.id);
+    }
+  }, []);
+
+  // Start a new chunk recording
+  const startNewChunk = useCallback(() => {
+    if (!mediaRecorderRef.current) return;
+
+    // Save current recordings
+    if (chunksRef.current.length > 0) {
+      const chunkId = chunkIdCounterRef.current++;
+      const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
+
+      setChunks((prev) => [
+        ...prev,
+        { id: chunkId, blob: audioBlob, status: 'pending' },
+      ]);
+
+      // Trigger processing
+      setTimeout(() => {
+        processChunk({ id: chunkId, blob: audioBlob, status: 'pending' });
+      }, 100);
+
+      chunksRef.current = [];
     }
 
-    // Stop speech recognition
-    if (stopListeningRef.current) {
-      stopListeningRef.current();
-    }
-
-    // Stop timer
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-
-    // Stop animation frame
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-
-    // Stop all tracks
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-
-    // Close audio context
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-
-    setStatus('stopped');
-    setAudioLevel(0);
-    setIsSilent(false);
-    setSilenceDuration(0);
-  }, [stopKeepAlive]);
-
-  // Keep stopRecording ref updated
-  useEffect(() => {
-    stopRecordingFnRef.current = stopRecording;
-  }, [stopRecording]);
+    // Restart recording for next chunk
+    mediaRecorderRef.current.start(1000);
+  }, [processChunk]);
 
   const startRecording = useCallback(async () => {
     try {
       setStatus('requesting');
+      setChunks([]);
+      setWarnings([]);
+      chunkIdCounterRef.current = 0;
+      chunksRef.current = [];
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
           sampleRate: 16000,
         },
       });
 
       mediaStreamRef.current = stream;
 
-      // Create audio context for visualization
-      const audioContext = new AudioContext();
-      audioContextRef.current = audioContext;
-      const source = audioContext.createMediaStreamSource(stream);
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      analyserRef.current = analyser;
-
-      // Start keep-alive silent audio to prevent browser from sleeping
-      startKeepAlive(audioContext);
-
-      // Start media recorder
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: 'audio/webm;codecs=opus',
       });
-      mediaRecorderRef.current = mediaRecorder;
 
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorderRef.current = mediaRecorder;
       mediaRecorder.start(1000);
       setStatus('recording');
 
-      // Start timer
+      // Start timers
       setElapsedTime(0);
       timerRef.current = setInterval(() => {
-        setElapsedTime((prev) => prev + 1);
+        setElapsedTime((prev) => {
+          const newTime = prev + 1;
+          // Auto-stop after 2 hours
+          if (newTime >= MAX_RECORDING_MS / 1000) {
+            stopRecording();
+            onAutoStop?.();
+          }
+          return newTime;
+        });
       }, 1000);
 
-      // Start speech recognition
-      startListening();
+      // Chunk timer (every 3 minutes)
+      chunkTimerRef.current = setInterval(() => {
+        startNewChunk();
+      }, CHUNK_DURATION_MS);
 
-      // Audio level monitoring using recursive animation frame
-      const monitorAudio = () => {
-        if (!analyserRef.current || status !== 'recording') return;
-
-        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
-        analyserRef.current.getByteFrequencyData(dataArray);
-
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) {
-          const normalized = (dataArray[i] - 128) / 128;
-          sum += normalized * normalized;
-        }
-        const energy = Math.sqrt(sum / dataArray.length);
-
-        setAudioLevel(Math.min(energy * 5, 100));
-        setIsSilent(energy < 0.02);
-
-        if (energy < 0.02) {
-          if (silenceStartRef.current === null) {
-            silenceStartRef.current = Date.now();
-          }
-          const duration = Date.now() - silenceStartRef.current;
-          setSilenceDuration(duration);
-
-          // 30 minutes = 1800000ms
-          if (duration >= 1800000) {
-            if (stopRecordingFnRef.current) {
-              stopRecordingFnRef.current();
-            }
-            if (autoStopCallbackRef.current) {
-              autoStopCallbackRef.current();
-            }
-            return; // Stop monitoring
-          }
-        } else {
-          silenceStartRef.current = null;
-          setSilenceDuration(0);
-        }
-
-        animationFrameRef.current = requestAnimationFrame(monitorAudio);
-      };
-
-      animationFrameRef.current = requestAnimationFrame(monitorAudio);
+      // Keep page alive
+      startKeepAlive();
     } catch (error) {
       console.error('Failed to start recording:', error);
       setStatus('idle');
     }
-  }, [startListening, startKeepAlive, status]);
+  }, [onAutoStop, startKeepAlive, startNewChunk]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      // Save final chunk
+      if (chunksRef.current.length > 0) {
+        const chunkId = chunkIdCounterRef.current++;
+        const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        setChunks((prev) => [
+          ...prev,
+          { id: chunkId, blob: audioBlob, status: 'pending' },
+        ]);
+        processChunk({ id: chunkId, blob: audioBlob, status: 'pending' });
+        chunksRef.current = [];
+      }
+
+      mediaRecorderRef.current.stop();
+    }
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    if (chunkTimerRef.current) {
+      clearInterval(chunkTimerRef.current);
+      chunkTimerRef.current = null;
+    }
+
+    stopKeepAlive();
+    setStatus('stopped');
+  }, [processChunk, stopKeepAlive]);
+
+  // Update parent when transcript changes
+  useEffect(() => {
+    onTranscriptChange?.(fullTranscript);
+  }, [fullTranscript, onTranscriptChange]);
+
+  // Update processed results for word cloud
+  useEffect(() => {
+    const results: ProcessedResult[] = [];
+    chunks.forEach((chunk) => {
+      if (chunk.status === 'completed' && chunk.words) {
+        chunk.words.forEach((w) => {
+          results.push({ word: w.word, weight: w.weight, source: 'llm' });
+        });
+      }
+    });
+    onProcessedResultsChange?.(results);
+  }, [chunks, onProcessedResultsChange]);
+
+  // Update progress
+  useEffect(() => {
+    const completed = chunks.filter((c) => c.status === 'completed').length;
+    const processing = chunks.filter((c) => c.status === 'processing').length;
+    const pending = chunks.filter((c) => c.status === 'pending').length;
+    const failed = chunks.filter((c) => c.status === 'failed').length;
+    onProgressUpdate?.({ completed, processing, pending, failed });
+  }, [chunks, onProgressUpdate]);
 
   const resetRecording = useCallback(() => {
-    setSegments([]);
+    setChunks([]);
     setElapsedTime(0);
-    resetTranscript();
+    setWarnings([]);
     setStatus('idle');
-  }, [resetTranscript]);
+  }, []);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       stopKeepAlive();
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (chunkTimerRef.current) clearInterval(chunkTimerRef.current);
     };
   }, [stopKeepAlive]);
 
-  // Format time as HH:MM:SS
+  // Format time
   const formatTime = (seconds: number): string => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -285,45 +335,15 @@ export function MeetingRecorder({ onTranscriptChange, onAutoStop }: MeetingRecor
     return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Calculate remaining silence time before auto-stop
-  const remainingSilence = Math.max(0, 30 * 60 * 1000 - silenceDuration);
-
-  if (!isSupported) {
-    return (
-      <Card className="w-full">
-        <CardContent className="pt-6 text-center">
-          <p className="text-destructive">您的浏览器不支持语音识别功能</p>
-          <p className="text-sm text-muted-foreground mt-2">
-            请使用 Chrome、Safari 或 Edge 浏览器
-          </p>
-        </CardContent>
-      </Card>
-    );
-  }
+  const completedChunks = chunks.filter((c) => c.status === 'completed').length;
+  const pendingChunks = chunks.filter((c) => c.status === 'pending').length;
+  const failedChunks = chunks.filter((c) => c.status === 'failed').length;
 
   return (
     <div className="space-y-4">
-      {/* Status Card */}
       <Card className={status === 'recording' ? 'border-green-500 shadow-lg' : ''}>
         <CardContent className="pt-6">
           <div className="flex flex-col items-center gap-4">
-            {/* Audio Level Indicator */}
-            {status === 'recording' && (
-              <div className="flex items-center gap-2 w-full max-w-xs">
-                <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-green-400 to-green-600 transition-all duration-100"
-                    style={{ width: `${audioLevel}%` }}
-                  />
-                </div>
-                {isSilent && (
-                  <span className="text-xs text-muted-foreground whitespace-nowrap">
-                    静默 {Math.floor(remainingSilence / 60000)}分钟
-                  </span>
-                )}
-              </div>
-            )}
-
             {/* Status Display */}
             <div className="text-center">
               <div className="flex items-center justify-center gap-2 mb-2">
@@ -352,10 +372,29 @@ export function MeetingRecorder({ onTranscriptChange, onAutoStop }: MeetingRecor
                 {formatTime(elapsedTime)}
               </div>
 
-              {/* Word Count */}
-              <div className="text-sm text-muted-foreground mt-2">
-                已识别文字：{fullTranscript.length} 字
-              </div>
+              {/* Progress */}
+              {status === 'recording' && (
+                <div className="text-sm text-muted-foreground mt-2">
+                  <div>片段: {completedChunks} 已完成 | {pendingChunks} 待处理 | {failedChunks} 失败</div>
+                  {pendingChunks > 0 && (
+                    <div className="text-xs text-orange-500 mt-1">
+                      正在后台处理，请稍候...
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Warnings */}
+              {warnings.length > 0 && (
+                <div className="mt-2 p-2 bg-yellow-50 rounded text-xs text-yellow-700">
+                  {warnings.map((w, i) => (
+                    <div key={i} className="flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      {w}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Control Buttons */}

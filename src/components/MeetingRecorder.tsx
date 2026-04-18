@@ -52,6 +52,7 @@ export function MeetingRecorder({
   const silenceStartRef = useRef<number | null>(null);
   const processingRef = useRef<Set<number>>(new Set());
   const chunkIdCounterRef = useRef(0);
+  const stopRecordingRef = useRef<() => void>(() => {});
 
   const fullTranscript = chunks
     .filter((c) => c.status === 'completed' && c.transcript)
@@ -173,32 +174,46 @@ export function MeetingRecorder({
     }
   }, []);
 
-  // Start a new chunk recording
+  // Start a new chunk recording: stop current recorder → collect data → restart
   const startNewChunk = useCallback(() => {
-    if (!mediaRecorderRef.current) return;
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === 'inactive') return;
 
-    // Save current recordings
-    if (chunksRef.current.length > 0) {
-      const chunkId = chunkIdCounterRef.current++;
-      // Determine the actual MIME type from the recorder
-      const mimeType = mediaRecorderRef.current.mimeType || 'audio/ogg';
-      const audioBlob = new Blob(chunksRef.current, { type: mimeType });
+    // If no data collected yet, nothing to do
+    if (chunksRef.current.length === 0) return;
 
-      setChunks((prev) => [
-        ...prev,
-        { id: chunkId, blob: audioBlob, status: 'pending' },
-      ]);
+    // Stop the recorder - this triggers final ondataavailable + onstop
+    recorder.stop();
 
-      // Trigger processing
-      setTimeout(() => {
-        processChunk({ id: chunkId, blob: audioBlob, status: 'pending' });
-      }, 100);
+    // The onstop handler will collect data, process it, and restart recording
+    recorder.onstop = () => {
+      if (chunksRef.current.length > 0) {
+        const chunkId = chunkIdCounterRef.current++;
+        const mimeType = recorder.mimeType || 'audio/ogg';
+        const audioBlob = new Blob(chunksRef.current, { type: mimeType });
 
-      chunksRef.current = [];
-    }
+        setChunks((prev) => [
+          ...prev,
+          { id: chunkId, blob: audioBlob, status: 'pending' },
+        ]);
 
-    // Restart recording for next chunk
-    mediaRecorderRef.current.start(1000);
+        // Trigger processing
+        setTimeout(() => {
+          processChunk({ id: chunkId, blob: audioBlob, status: 'pending' });
+        }, 100);
+
+        chunksRef.current = [];
+      }
+
+      // Restart recording for next chunk - new recording gets a fresh container header
+      if (mediaRecorderRef.current && mediaStreamRef.current) {
+        try {
+          mediaRecorderRef.current.start(1000);
+        } catch (e) {
+          console.error('[Recorder] Failed to restart recording:', e);
+        }
+      }
+    };
   }, [processChunk]);
 
   const startRecording = useCallback(async () => {
@@ -250,7 +265,7 @@ export function MeetingRecorder({
           const newTime = prev + 1;
           // Auto-stop after 2 hours
           if (newTime >= MAX_RECORDING_MS / 1000) {
-            stopRecording();
+            stopRecordingRef.current();
             onAutoStop?.();
           }
           return newTime;
@@ -271,42 +286,64 @@ export function MeetingRecorder({
   }, [onAutoStop, startKeepAlive, startNewChunk]);
 
   const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      // Save final chunk
-      if (chunksRef.current.length > 0) {
-        const chunkId = chunkIdCounterRef.current++;
-        // Determine the actual MIME type from the recorder
-        const mimeType = mediaRecorderRef.current.mimeType || 'audio/ogg';
-        const audioBlob = new Blob(chunksRef.current, { type: mimeType });
-        setChunks((prev) => [
-          ...prev,
-          { id: chunkId, blob: audioBlob, status: 'pending' },
-        ]);
-        processChunk({ id: chunkId, blob: audioBlob, status: 'pending' });
-        chunksRef.current = [];
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      // Use onstop to collect final chunk data after recorder flushes
+      recorder.onstop = () => {
+        if (chunksRef.current.length > 0) {
+          const chunkId = chunkIdCounterRef.current++;
+          const mimeType = recorder.mimeType || 'audio/ogg';
+          const audioBlob = new Blob(chunksRef.current, { type: mimeType });
+          setChunks((prev) => [
+            ...prev,
+            { id: chunkId, blob: audioBlob, status: 'pending' },
+          ]);
+          processChunk({ id: chunkId, blob: audioBlob, status: 'pending' });
+          chunksRef.current = [];
+        }
+
+        // Stop the media stream
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+          mediaStreamRef.current = null;
+        }
+
+        // Stop timers
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+        if (chunkTimerRef.current) {
+          clearInterval(chunkTimerRef.current);
+          chunkTimerRef.current = null;
+        }
+
+        stopKeepAlive();
+        setStatus('stopped');
+      };
+
+      recorder.stop();
+    } else {
+      // Recorder already stopped, just clean up
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
       }
-
-      mediaRecorderRef.current.stop();
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      if (chunkTimerRef.current) {
+        clearInterval(chunkTimerRef.current);
+        chunkTimerRef.current = null;
+      }
+      stopKeepAlive();
+      setStatus('stopped');
     }
-
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
-
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-
-    if (chunkTimerRef.current) {
-      clearInterval(chunkTimerRef.current);
-      chunkTimerRef.current = null;
-    }
-
-    stopKeepAlive();
-    setStatus('stopped');
   }, [processChunk, stopKeepAlive]);
+
+  // Keep stopRecording ref up to date
+  stopRecordingRef.current = stopRecording;
 
   // Update parent when transcript changes
   useEffect(() => {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ASRClient, Config } from 'coze-coding-dev-sdk';
+import { ASRClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300; // 5分钟超时
@@ -22,9 +22,12 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
     const base64Data = buffer.toString('base64');
 
-    // Call ASR API
+    // Extract forward headers from the request
+    const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);
+    
+    // Call ASR API with proper configuration
     const config = new Config();
-    const client = new ASRClient(config);
+    const client = new ASRClient(config, customHeaders);
 
     const result = await client.recognize({
       uid: `chunk-${chunkId || Date.now()}`,
@@ -38,11 +41,12 @@ export async function POST(request: NextRequest) {
       duration: result.duration,
     });
   } catch (error) {
-    console.error('ASR transcription error:', error);
+    console.error('[ASR] 语音转写错误:', error);
+    const errorMessage = error instanceof Error ? error.message : '未知错误';
     return NextResponse.json(
       { 
         error: '语音转写失败',
-        details: error instanceof Error ? error.message : '未知错误'
+        details: errorMessage
       },
       { status: 500 }
     );

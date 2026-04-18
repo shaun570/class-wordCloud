@@ -97,9 +97,20 @@ export function MeetingRecorder({
     processingRef.current.add(chunk.id);
 
     try {
+      // Determine file extension from MIME type
+      const mimeType = chunk.blob.type;
+      let extension = 'ogg';
+      if (mimeType.includes('mp4') || mimeType.includes('m4a')) {
+        extension = 'm4a';
+      } else if (mimeType.includes('webm')) {
+        extension = 'webm';
+      } else if (mimeType.includes('wav')) {
+        extension = 'wav';
+      }
+
       // Step 1: ASR transcription
       const formData = new FormData();
-      formData.append('audio', chunk.blob, `chunk-${chunk.id}.webm`);
+      formData.append('audio', chunk.blob, `chunk-${chunk.id}.${extension}`);
       formData.append('chunkId', String(chunk.id));
 
       const transcribeResponse = await fetch('/api/transcribe', {
@@ -169,7 +180,9 @@ export function MeetingRecorder({
     // Save current recordings
     if (chunksRef.current.length > 0) {
       const chunkId = chunkIdCounterRef.current++;
-      const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      // Determine the actual MIME type from the recorder
+      const mimeType = mediaRecorderRef.current.mimeType || 'audio/ogg';
+      const audioBlob = new Blob(chunksRef.current, { type: mimeType });
 
       setChunks((prev) => [
         ...prev,
@@ -207,8 +220,17 @@ export function MeetingRecorder({
 
       mediaStreamRef.current = stream;
 
+      // Try OGG OPUS first (supported by ASR), fallback to MP3 or webm
+      let mimeType = 'audio/ogg;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/mp4';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'audio/webm;codecs=opus';
+        }
+      }
+
       const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus',
+        mimeType,
       });
 
       mediaRecorder.ondataavailable = (event) => {
@@ -253,7 +275,9 @@ export function MeetingRecorder({
       // Save final chunk
       if (chunksRef.current.length > 0) {
         const chunkId = chunkIdCounterRef.current++;
-        const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        // Determine the actual MIME type from the recorder
+        const mimeType = mediaRecorderRef.current.mimeType || 'audio/ogg';
+        const audioBlob = new Blob(chunksRef.current, { type: mimeType });
         setChunks((prev) => [
           ...prev,
           { id: chunkId, blob: audioBlob, status: 'pending' },

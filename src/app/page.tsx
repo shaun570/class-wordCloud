@@ -197,11 +197,11 @@ export default function HomePage() {
 
           {/* Feature 2: Dual buttons after recording stops and all chunks processed */}
           {recordingStopped && allChunksProcessed && (
-            <div className="flex flex-col items-center gap-2">
+            <div className="flex flex-col items-center gap-3 w-full">
               <Button
                 onClick={handleGenerateWordCloud}
                 size="lg"
-                className="w-full bg-green-500 hover:bg-green-600"
+                className="w-full bg-green-500 hover:bg-green-600 h-12"
                 disabled={!hasContent}
               >
                 <Cloud className="mr-2 h-5 w-5" />
@@ -209,8 +209,7 @@ export default function HomePage() {
               </Button>
               <Button
                 onClick={() => setShowExampleDialog(true)}
-                size="lg"
-                className="w-full bg-green-100 hover:bg-green-200 text-green-800 border-2 border-green-300 py-6 text-lg"
+                className="w-full bg-green-100 hover:bg-green-200 text-green-800 border-2 border-green-300 h-14 text-lg font-semibold"
                 variant="outline"
               >
                 <ImageIcon className="mr-2 h-6 w-6" />

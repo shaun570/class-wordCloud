@@ -18,6 +18,9 @@ const SYSTEM_PROMPT = `你是一个专业的地理和教育领域文本分析助
 4. 专业术语和核心概念权重 ×2
 5. 一般性词汇保持原权重 ×1
 6. 无意义的虚词、口头禅等权重 ×0.1 或忽略（如：这个、那个、就是、那么、怎么、什么等）
+7. 特殊词汇权重规则：
+   - "韧性城市"权重 ×4（城市规划核心概念）
+   - "同学们""指导手册"权重 ×1（降为一般词汇，不享受教育或专业加成）
 
 请以JSON格式返回，格式如下：
 {
@@ -183,6 +186,16 @@ function simpleWordAnalysis(text: string): WordWeight[] {
     '城市', '农村', '山区', '沿海', '内陆', '边境', '东南', '西北', '东北', '西南',
   ]);
 
+  // Special high-weight words (weight ×4)
+  const specialHighWords = new Set([
+    '韧性城市',
+  ]);
+
+  // Demoted words (weight ×1, override any category boost)
+  const demotedWords = new Set([
+    '同学们', '指导手册',
+  ]);
+
   // Education-related words (medium-high weight)
   const eduWords = new Set([
     '学习', '学生', '老师', '教师', '教学', '课程', '课堂', '教室', '学校',
@@ -219,7 +232,11 @@ function simpleWordAnalysis(text: string): WordWeight[] {
   const result: WordWeight[] = [];
   countMap.forEach((count, word) => {
     let weight = count;
-    if (geoWords.has(word)) {
+    if (specialHighWords.has(word)) {
+      weight = count * 4;
+    } else if (demotedWords.has(word)) {
+      weight = count * 1; // Force weight ×1, no category boost
+    } else if (geoWords.has(word)) {
       weight = count * 3;
     } else if (eduWords.has(word)) {
       weight = count * 2.5;

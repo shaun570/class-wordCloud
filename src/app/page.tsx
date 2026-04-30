@@ -5,7 +5,7 @@ import { MeetingRecorder } from '@/components/MeetingRecorder';
 import { TranscriptView } from '@/components/TranscriptView';
 import dynamic from 'next/dynamic';
 import { Button } from '@/components/ui/button';
-import { Cloud } from 'lucide-react';
+import { Cloud, FileText, X, Image as ImageIcon, Loader2 } from 'lucide-react';
 
 // Dynamically import WordCloud to avoid SSR issues with echarts
 const WordCloud = dynamic(
@@ -34,6 +34,18 @@ export default function HomePage() {
   const [processedResults, setProcessedResults] = useState<ProcessedResult[]>([]);
   const [showWordCloud, setShowWordCloud] = useState(false);
   const [progress, setProgress] = useState({ completed: 0, processing: 0, pending: 0, failed: 0 });
+  
+  // Feature 1: Paste text dialog
+  const [showPasteDialog, setShowPasteDialog] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  
+  // Feature 2: Example image dialog
+  const [showExampleDialog, setShowExampleDialog] = useState(false);
+  
+  // Track if recording is stopped and all chunks processed
+  const [recordingStopped, setRecordingStopped] = useState(false);
+  const [allChunksProcessed, setAllChunksProcessed] = useState(false);
 
   const handleTranscriptChange = useCallback((fullTranscript: string) => {
     setTranscript(fullTranscript);
@@ -45,11 +57,20 @@ export default function HomePage() {
 
   const handleProgressUpdate = useCallback((newProgress: { completed: number; processing: number; pending: number; failed: number }) => {
     setProgress(newProgress);
-  }, []);
+    // Check if all chunks are processed (no pending or processing chunks)
+    if (recordingStopped && newProgress.pending === 0 && newProgress.processing === 0 && (newProgress.completed > 0 || newProgress.failed > 0)) {
+      setAllChunksProcessed(true);
+    }
+  }, [recordingStopped]);
 
   const handleAutoStop = useCallback(() => {
     setStatus('completed');
+    setRecordingStopped(true);
     setShowWordCloud(true);
+  }, []);
+
+  const handleRecordingStopped = useCallback(() => {
+    setRecordingStopped(true);
   }, []);
 
   const handleGenerateWordCloud = useCallback(() => {
@@ -59,12 +80,49 @@ export default function HomePage() {
     }
   }, [processedResults, transcript]);
 
+  // Feature 1: Handle paste text word cloud generation
+  const handlePasteGenerate = useCallback(async () => {
+    if (!pasteText.trim()) return;
+    
+    setIsAnalyzing(true);
+    try {
+      const response = await fetch('/api/analyze-words', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: pasteText.trim() }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Analysis failed');
+      }
+
+      const { words } = await response.json();
+      if (words && words.length > 0) {
+        setProcessedResults(words.map((w: { word: string; weight: number }) => ({
+          word: w.word,
+          weight: w.weight,
+          source: 'llm' as const,
+        })));
+        setStatus('generating');
+        setShowWordCloud(true);
+        setShowPasteDialog(false);
+        setPasteText('');
+      }
+    } catch (error) {
+      console.error('Paste analysis failed:', error);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [pasteText]);
+
   const handleReset = useCallback(() => {
     setStatus('recording');
     setTranscript('');
     setProcessedResults([]);
     setShowWordCloud(false);
     setProgress({ completed: 0, processing: 0, pending: 0, failed: 0 });
+    setRecordingStopped(false);
+    setAllChunksProcessed(false);
   }, []);
 
   const hasContent = processedResults.length > 0 || transcript.length > 0;
@@ -74,14 +132,25 @@ export default function HomePage() {
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-sm border-b border-green-100">
         <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center">
-              <Cloud className="w-6 h-6 text-white" />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center">
+                <Cloud className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-green-800">会议助手</h1>
+                <p className="text-sm text-green-600">智能录音转文字，词云分析</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-xl font-bold text-green-800">会议助手</h1>
-              <p className="text-sm text-green-600">智能录音转文字，词云分析</p>
-            </div>
+            {/* Feature 1: 会议记录 button */}
+            <Button
+              onClick={() => setShowPasteDialog(true)}
+              variant="outline"
+              className="border-green-300 text-green-700 hover:bg-green-50"
+            >
+              <FileText className="mr-2 h-4 w-4" />
+              会议记录
+            </Button>
           </div>
         </div>
       </header>
@@ -96,6 +165,7 @@ export default function HomePage() {
             onProcessedResultsChange={handleProcessedResultsChange}
             onProgressUpdate={handleProgressUpdate}
             onAutoStop={handleAutoStop}
+            onRecordingStopped={handleRecordingStopped}
           />
 
           {/* Progress Indicator (Mobile) */}
@@ -113,7 +183,7 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* Generate Button (Mobile) */}
+          {/* Generate Buttons (Mobile) */}
           {status === 'recording' && hasContent && (
             <Button
               onClick={handleGenerateWordCloud}
@@ -123,6 +193,30 @@ export default function HomePage() {
               <Cloud className="mr-2 h-5 w-5" />
               生成词云
             </Button>
+          )}
+
+          {/* Feature 2: Dual buttons after recording stops and all chunks processed */}
+          {recordingStopped && allChunksProcessed && (
+            <div className="flex flex-col items-center gap-2">
+              <Button
+                onClick={handleGenerateWordCloud}
+                size="lg"
+                className="w-full bg-green-500 hover:bg-green-600"
+                disabled={!hasContent}
+              >
+                <Cloud className="mr-2 h-5 w-5" />
+                生成词云
+              </Button>
+              <Button
+                onClick={() => setShowExampleDialog(true)}
+                size="lg"
+                className="w-full bg-green-100 hover:bg-green-200 text-green-800 border-2 border-green-300 py-6 text-lg"
+                variant="outline"
+              >
+                <ImageIcon className="mr-2 h-6 w-6" />
+                查看例图
+              </Button>
+            </div>
           )}
 
           {/* Transcript View */}
@@ -149,6 +243,7 @@ export default function HomePage() {
               onProcessedResultsChange={handleProcessedResultsChange}
               onProgressUpdate={handleProgressUpdate}
               onAutoStop={handleAutoStop}
+              onRecordingStopped={handleRecordingStopped}
             />
 
             {/* Progress Indicator (Desktop) */}
@@ -166,7 +261,7 @@ export default function HomePage() {
               </div>
             )}
 
-            {/* Generate Button (Desktop) */}
+            {/* Generate Button (Desktop - during recording) */}
             {status === 'recording' && hasContent && (
               <Button
                 onClick={handleGenerateWordCloud}
@@ -176,6 +271,30 @@ export default function HomePage() {
                 <Cloud className="mr-2 h-5 w-5" />
                 生成词云
               </Button>
+            )}
+
+            {/* Feature 2: Dual buttons after recording stops and all chunks processed */}
+            {recordingStopped && allChunksProcessed && (
+              <div className="flex flex-col items-center gap-2">
+                <Button
+                  onClick={handleGenerateWordCloud}
+                  size="lg"
+                  className="w-full bg-green-500 hover:bg-green-600"
+                  disabled={!hasContent}
+                >
+                  <Cloud className="mr-2 h-5 w-5" />
+                  生成词云
+                </Button>
+                <Button
+                  onClick={() => setShowExampleDialog(true)}
+                  size="lg"
+                  className="w-full bg-green-100 hover:bg-green-200 text-green-800 border-2 border-green-300 py-6 text-lg"
+                  variant="outline"
+                >
+                  <ImageIcon className="mr-2 h-6 w-6" />
+                  查看例图
+                </Button>
+              </div>
             )}
 
             <div className="flex-1 min-h-0">
@@ -221,6 +340,86 @@ export default function HomePage() {
           </p>
         </div>
       </footer>
+
+      {/* Feature 1: Paste Text Dialog */}
+      {showPasteDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg">
+            <div className="flex items-center justify-between p-4 border-b border-green-100">
+              <h2 className="text-lg font-semibold text-green-800">粘贴文稿</h2>
+              <button
+                onClick={() => { setShowPasteDialog(false); setPasteText(''); }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4">
+              <textarea
+                value={pasteText}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val.length <= 5000) {
+                    setPasteText(val);
+                  }
+                }}
+                placeholder="请粘贴会议文稿内容，最多5000字..."
+                className="w-full h-48 p-3 border border-green-200 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-green-400 focus:border-transparent text-sm"
+              />
+              <div className="flex items-center justify-between mt-2">
+                <span className="text-xs text-gray-400">
+                  {pasteText.length}/5000
+                </span>
+              </div>
+            </div>
+            <div className="p-4 pt-0">
+              <Button
+                onClick={handlePasteGenerate}
+                disabled={!pasteText.trim() || isAnalyzing}
+                className="w-full bg-green-500 hover:bg-green-600 text-white"
+                size="lg"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    正在分析...
+                  </>
+                ) : (
+                  <>
+                    <Cloud className="mr-2 h-5 w-5" />
+                    生成词云
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Feature 2: Example Image Dialog */}
+      {showExampleDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" onClick={() => setShowExampleDialog(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b border-green-100">
+              <h2 className="text-lg font-semibold text-green-800">词云例图</h2>
+              <button
+                onClick={() => setShowExampleDialog(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 flex items-center justify-center min-h-[300px]">
+              {/* Placeholder image - replace with actual word cloud example */}
+              <img
+                src="/wordcloud-example.png"
+                alt="词云例图"
+                className="max-w-full max-h-[500px] object-contain rounded"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

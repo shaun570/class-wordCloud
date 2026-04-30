@@ -25,6 +25,7 @@ interface MeetingRecorderProps {
   onProcessedResultsChange?: (results: ProcessedResult[]) => void;
   onAutoStop?: () => void;
   onProgressUpdate?: (progress: { completed: number; processing: number; pending: number; failed: number }) => void;
+  onRecordingStopped?: () => void;
 }
 
 type RecordingStatus = 'idle' | 'requesting' | 'recording' | 'stopped';
@@ -37,6 +38,7 @@ export function MeetingRecorder({
   onProcessedResultsChange,
   onAutoStop,
   onProgressUpdate,
+  onRecordingStopped,
 }: MeetingRecorderProps) {
   const [status, setStatus] = useState<RecordingStatus>('idle');
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -123,7 +125,20 @@ export function MeetingRecorder({
         throw new Error('Transcription failed');
       }
 
-      const { text: transcript } = await transcribeResponse.json();
+      const { text: transcript, isSilent } = await transcribeResponse.json();
+
+      // If this is a silent chunk, mark as completed with empty text (not an error)
+      if (isSilent) {
+        setChunks((prev) =>
+          prev.map((c) =>
+            c.id === chunk.id
+              ? { ...c, status: 'completed', transcript: '' }
+              : c
+          )
+        );
+        processingRef.current.delete(chunk.id);
+        return;
+      }
 
       // Step 2: LLM word analysis
       const analyzeResponse = await fetch('/api/analyze-words', {
@@ -320,6 +335,7 @@ export function MeetingRecorder({
 
         stopKeepAlive();
         setStatus('stopped');
+        onRecordingStopped?.();
       };
 
       recorder.stop();
@@ -339,8 +355,9 @@ export function MeetingRecorder({
       }
       stopKeepAlive();
       setStatus('stopped');
+      onRecordingStopped?.();
     }
-  }, [processChunk, stopKeepAlive]);
+  }, [processChunk, stopKeepAlive, onRecordingStopped]);
 
   // Keep stopRecording ref up to date
   stopRecordingRef.current = stopRecording;

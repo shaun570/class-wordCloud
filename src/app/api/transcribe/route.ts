@@ -7,11 +7,12 @@ export const maxDuration = 300; // 5分钟超时
 export async function POST(request: NextRequest) {
   let fileKey: string | null = null;
   let storage: S3Storage | null = null;
+  let chunkId: string | null = null;
   
   try {
     const formData = await request.formData();
     const audioFile = formData.get('audio') as File | null;
-    const chunkId = formData.get('chunkId') as string | null;
+    chunkId = formData.get('chunkId') as string | null;
 
     if (!audioFile) {
       return NextResponse.json(
@@ -69,12 +70,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       chunkId,
-      text: result.text,
+      text: result.text || '',
       duration: result.duration,
     });
   } catch (error) {
     console.error('[ASR] 语音转写错误:', error);
     const errorMessage = error instanceof Error ? error.message : '未知错误';
+    
+    // Check if it's a "silence audio" error - return empty text instead of 500
+    if (errorMessage.includes('silence audio') || errorMessage.includes('no valid speech') || errorMessage.includes('20000003')) {
+      console.log('[ASR] 检测到静音片段，返回空文本');
+      return NextResponse.json({
+        success: true,
+        chunkId,
+        text: '',
+        duration: 0,
+        isSilent: true,
+      });
+    }
+    
     return NextResponse.json(
       { 
         error: '语音转写失败',

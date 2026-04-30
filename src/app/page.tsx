@@ -184,24 +184,15 @@ export default function HomePage() {
           )}
 
           {/* Generate Buttons (Mobile) */}
-          {status === 'recording' && hasContent && (
-            <Button
-              onClick={handleGenerateWordCloud}
-              size="lg"
-              className="w-full bg-green-500 hover:bg-green-600"
-            >
-              <Cloud className="mr-2 h-5 w-5" />
-              生成词云
-            </Button>
-          )}
+         
 
           {/* Feature 2: Dual buttons after recording stops and all chunks processed */}
           {recordingStopped && allChunksProcessed && (
-            <div className="flex flex-col items-center gap-2">
+            <div className="relative w-full items-center">
               <Button
                 onClick={handleGenerateWordCloud}
                 size="lg"
-                className="w-full bg-green-500 hover:bg-green-600"
+                className="relative z-10 w-full bg-green-500 hover:bg-green-600"
                 disabled={!hasContent}
               >
                 <Cloud className="mr-2 h-5 w-5" />
@@ -210,11 +201,12 @@ export default function HomePage() {
               <Button
                 onClick={() => setShowExampleDialog(true)}
                 size="lg"
-                className="w-full bg-green-100 hover:bg-green-200 text-green-800 border-2 border-green-300 py-6 text-lg"
+                className="absolute inset-0 w-full bg-green-100  text-green-800 border-2 border-green-300 py-5 text-lg"
                 variant="outline"
               >
-                <ImageIcon className="mr-2 h-6 w-6" />
-                查看例图
+                
+                {/*<ImageIcon className="mr-2 h-6 w-6" />
+                查看例图*/}
               </Button>
             </div>
           )}
@@ -261,25 +253,15 @@ export default function HomePage() {
               </div>
             )}
 
-            {/* Generate Button (Desktop - during recording) */}
-            {status === 'recording' && hasContent && (
-              <Button
-                onClick={handleGenerateWordCloud}
-                size="lg"
-                className="bg-green-500 hover:bg-green-600"
-              >
-                <Cloud className="mr-2 h-5 w-5" />
-                生成词云
-              </Button>
-            )}
+            
 
             {/* Feature 2: Dual buttons after recording stops and all chunks processed */}
             {recordingStopped && allChunksProcessed && (
-              <div className="flex flex-col items-center gap-2">
+              <div className="relative w-full items-center">
                 <Button
                   onClick={handleGenerateWordCloud}
                   size="lg"
-                  className="w-full bg-green-500 hover:bg-green-600"
+                  className="relative z-10 w-full bg-green-500 hover:bg-green-600"
                   disabled={!hasContent}
                 >
                   <Cloud className="mr-2 h-5 w-5" />
@@ -288,11 +270,11 @@ export default function HomePage() {
                 <Button
                   onClick={() => setShowExampleDialog(true)}
                   size="lg"
-                  className="w-full bg-green-100 hover:bg-green-200 text-green-800 border-2 border-green-300 py-6 text-lg"
+                  className="absolute inset-0 w-full bg-green-100 hover:bg-green-200 text-green-800 border-2 border-green-300 py-6 text-lg"
                   variant="outline"
                 >
-                  <ImageIcon className="mr-2 h-6 w-6" />
-                  查看例图
+                  {/*  <ImageIcon className="mr-2 h-6 w-6" />
+                  查看例图*/}
                 </Button>
               </div>
             )}
@@ -401,7 +383,7 @@ export default function HomePage() {
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" onClick={() => setShowExampleDialog(false)}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-green-100">
-              <h2 className="text-lg font-semibold text-green-800">词云例图</h2>
+              <h2 className="text-lg font-semibold text-green-800">词云</h2>
               <button
                 onClick={() => setShowExampleDialog(false)}
                 className="text-gray-400 hover:text-gray-600"

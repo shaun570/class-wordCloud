@@ -21,6 +21,7 @@ interface ProcessedResult {
 }
 
 interface MeetingRecorderProps {
+  subject?: string;   
   onTranscriptChange?: (fullTranscript: string) => void;
   onProcessedResultsChange?: (results: ProcessedResult[]) => void;
   onAutoStop?: () => void;
@@ -34,6 +35,7 @@ const CHUNK_DURATION_MS = 3 * 60 * 1000; // 3 minutes
 const MAX_RECORDING_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 export function MeetingRecorder({
+  subject = 'general',
   onTranscriptChange,
   onProcessedResultsChange,
   onAutoStop,
@@ -144,7 +146,7 @@ export function MeetingRecorder({
       const analyzeResponse = await fetch('/api/analyze-words', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: transcript, chunkId: chunk.id }),
+        body: JSON.stringify({ text: transcript, chunkId: chunk.id, subject }),
       });
 
       if (!analyzeResponse.ok) {

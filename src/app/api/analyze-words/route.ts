@@ -2,116 +2,223 @@ import { NextRequest, NextResponse } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
 
 export const runtime = 'nodejs';
-export const maxDuration = 120; // 2分钟超时
+export const maxDuration = 120;
 
 interface WordWeight {
   word: string;
   weight: number;
 }
 
-const SYSTEM_PROMPT = `你是一个专业的地理和教育领域文本分析助手。请分析以下会议录音文本，提取关键词并根据其重要性赋予权重。
+interface ClassSummary {
+  mainTopics: string[];
+  teachingFlow: string;
+  keyConceptsRepeated: string[];
+  suggestions: string[];
+}
+
+// ─── 学科权重配置 ────────────────────────────────────────────
+const SUBJECT_WEIGHT_KEYWORDS: Record<string, { high: string[]; medium: string[] }> = {
+  geography: {
+    high: ['地形', '气候', '河流', '山脉', '高原', '平原', '盆地', '经度', '纬度',
+            '地震', '火山', '板块', '资源', '人口', '经济', '生态', '环境', '海拔',
+            '气温', '降水', '季风', '洋流', '地貌', '沙漠', '草原', '森林', '湿地'],
+    medium: ['学习', '教学', '课程', '知识', '概念', '原理', '分析', '总结', '地图'],
+  },
+  history: {
+    high: ['朝代', '战争', '革命', '改革', '起义', '条约', '文明', '帝国', '封建',
+            '殖民', '工业', '启蒙', '民主', '独立', '统一', '政治', '经济', '文化'],
+    medium: ['历史', '时期', '事件', '人物', '影响', '背景', '原因', '意义', '评价'],
+  },
+  chinese: {
+    high: ['诗歌', '散文', '小说', '戏剧', '修辞', '比喻', '拟人', '排比', '意象',
+            '主旨', '情感', '作者', '文言', '白话', '韵律', '结构', '段落', '主题'],
+    medium: ['阅读', '写作', '语言', '表达', '分析', '理解', '积累', '欣赏', '鉴赏'],
+  },
+  math: {
+    high: ['函数', '方程', '不等式', '导数', '积分', '向量', '矩阵', '概率', '统计',
+            '几何', '三角', '数列', '极限', '集合', '逻辑', '证明', '定理', '公式'],
+    medium: ['计算', '推导', '解题', '思路', '方法', '规律', '变量', '参数', '坐标'],
+  },
+  english: {
+    high: ['语法', '词汇', '听力', '阅读', '写作', '口语', '时态', '语态', '从句',
+            '短语', '句型', '篇章', '语境', '表达', '交流', '翻译', '理解', '应用'],
+    medium: ['单词', '发音', '练习', '背诵', '语言', '文化', '习惯', '技巧', '方法'],
+  },
+  physics: {
+    high: ['力学', '热学', '电磁', '光学', '原子', '能量', '动量', '电场', '磁场',
+            '电路', '波动', '振动', '折射', '反射', '加速度', '质量', '速度', '功率'],
+    medium: ['实验', '测量', '公式', '定律', '原理', '推导', '计算', '分析', '模型'],
+  },
+  chemistry: {
+    high: ['元素', '化合物', '反应', '氧化', '还原', '酸碱', '盐', '有机', '无机',
+            '分子', '原子', '离子', '键合', '溶液', '浓度', '催化', '平衡', '电化学'],
+    medium: ['实验', '方程式', '性质', '结构', '变化', '分析', '推断', '计算', '规律'],
+  },
+  biology: {
+    high: ['细胞', '遗传', '进化', '生态', '蛋白质', 'DNA', '基因', '酶', '光合',
+            '呼吸', '神经', '激素', '免疫', '种群', '群落', '生物链', '变异', '染色体'],
+    medium: ['实验', '观察', '分析', '结构', '功能', '过程', '机制', '调节', '适应'],
+  },
+  general: {
+    high: ['重点', '难点', '考点', '核心', '关键', '重要', '必须', '掌握', '理解'],
+    medium: ['学习', '教学', '课程', '知识', '概念', '分析', '总结', '方法', '技巧'],
+  },
+};
+
+// ─── System Prompt（词云分析） ────────────────────────────────
+function buildWordPrompt(subject: string): string {
+  const subjectNames: Record<string, string> = {
+    geography: '地理', history: '历史', chinese: '语文',
+    math: '数学', english: '英语', physics: '物理',
+    chemistry: '化学', biology: '生物', general: '通用',
+  };
+  const subjectName = subjectNames[subject] || '通用';
+
+  return `你是一位${subjectName}学科课堂分析专家（使用豆包大模型 doubao-seed-2-0-lite，字节跳动国产大模型）。
+请分析以下课堂录音文本，提取关键词并根据重要性赋予权重。
 
 分析要求：
 1. 提取有意义的关键词（2-5个字）
-2. 地理相关词汇（如：国家、城市、山脉、河流、气候、资源、人口、经济、文化等）权重 ×3
-3. 教育相关词汇（如：学习、学生、老师、课程、知识、考试、教学等）权重 ×2.5
-4. 专业术语和核心概念权重 ×2
-5. 一般性词汇保持原权重 ×1
-6. 无意义的虚词、口头禅等权重 ×0.1 或忽略（如：这个、那个、就是、那么、怎么、什么等）
+2. ${subjectName}学科核心术语权重 ×3
+3. 教学相关词汇（学习、掌握、理解、分析等）权重 ×2
+4. 一般性词汇保持原权重 ×1
+5. 无意义虚词、口头禅忽略（这个、那个、就是、然后等）
 
-请以JSON格式返回，格式如下：
+请严格以JSON格式返回，不要有其他内容：
 {
   "words": [
     {"word": "关键词", "weight": 数字},
     ...
   ]
+}`;
 }
 
-只返回JSON，不要有其他内容。`;
+// ─── System Prompt（课堂摘要） ────────────────────────────────
+function buildSummaryPrompt(subject: string): string {
+  const subjectNames: Record<string, string> = {
+    geography: '地理', history: '历史', chinese: '语文',
+    math: '数学', english: '英语', physics: '物理',
+    chemistry: '化学', biology: '生物', general: '通用',
+  };
+  const subjectName = subjectNames[subject] || '通用';
+
+  return `你是一位专业的${subjectName}学科教学分析专家（使用豆包大模型 doubao-seed-2-0-lite，字节跳动国产大模型）。
+请分析以下课堂录音文本，生成结构化的课堂分析报告。
+
+请严格以JSON格式返回，不要有其他内容：
+{
+  "mainTopics": ["本节课知识点1", "知识点2", "知识点3"],
+  "teachingFlow": "用2-3句话描述本节课的教学脉络",
+  "keyConceptsRepeated": ["反复强调的概念1", "概念2"],
+  "suggestions": ["教学建议1", "教学建议2"]
+}
+
+要求：
+- mainTopics：3-5个核心知识点，每个不超过10字
+- teachingFlow：100字以内，描述教学逻辑和进程
+- keyConceptsRepeated：教师反复提及的重要概念，2-4个
+- suggestions：基于课堂内容给出的改进建议，1-3条`;
+}
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { text, chunkId } = body;
+    const { text, chunkId, subject = 'general', generateSummary = false } = body;
 
     if (!text || typeof text !== 'string') {
-      return NextResponse.json(
-        { error: '缺少文本内容' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: '缺少文本内容' }, { status: 400 });
     }
 
-    // Extract forward headers from the request
     const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);
-    
-    // Initialize LLM client
     const config = new Config();
     const client = new LLMClient(config, customHeaders);
 
-    const messages = [
-      { role: 'system' as const, content: SYSTEM_PROMPT },
-      { role: 'user' as const, content: text }
+    // ── 步骤1：词云关键词分析 ──────────────────────────────────
+    const wordMessages = [
+      { role: 'system' as const, content: buildWordPrompt(subject) },
+      { role: 'user' as const, content: text },
     ];
 
-    // Call LLM API using invoke (non-streaming for structured JSON output)
-    const response = await client.invoke(messages, {
+    const wordResponse = await client.invoke(wordMessages, {
       model: 'doubao-seed-2-0-lite-260215',
-      temperature: 0.3, // Lower temperature for more consistent JSON output
+      temperature: 0.3,
     });
 
     let words: WordWeight[] = [];
 
-    if (response.content) {
+    if (wordResponse.content) {
       try {
-        // Extract JSON from the response (handle potential markdown code blocks)
-        let jsonStr = response.content;
-        
-        // Remove markdown code block markers if present
-        jsonStr = jsonStr.replace(/^```json\s*/i, '').replace(/\s*```$/i, '');
-        jsonStr = jsonStr.replace(/^```\s*/i, '').replace(/\s*```$/i, '');
-        
-        // Try to find JSON object in the content
+        let jsonStr = wordResponse.content
+          .replace(/^```json\s*/i, '').replace(/\s*```$/i, '')
+          .replace(/^```\s*/i, '').replace(/\s*```$/i, '');
         const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
           words = parsed.words || [];
-          console.log(`[LLM] 成功解析关键词，数量: ${words.length}`);
-        } else {
-          console.error('[LLM] 未找到JSON内容:', jsonStr.substring(0, 200));
         }
-      } catch (parseError) {
-        console.error('[LLM] 解析响应失败:', parseError, '原始内容:', response.content.substring(0, 500));
+      } catch (e) {
+        console.error('[LLM] 词云解析失败:', e);
       }
     }
 
-    // If LLM parsing failed, fall back to simple word analysis
     if (words.length === 0) {
-      console.log('[LLM] LLM解析失败，使用fallback函数');
-      words = simpleWordAnalysis(text);
+      words = simpleWordAnalysis(text, subject);
+    }
+
+    // ── 步骤2：课堂摘要生成（仅当 generateSummary=true 且文本足够长时） ──
+    let summary: ClassSummary | null = null;
+
+    if (generateSummary && text.length > 100) {
+      try {
+        const summaryMessages = [
+          { role: 'system' as const, content: buildSummaryPrompt(subject) },
+          { role: 'user' as const, content: text },
+        ];
+
+        const summaryResponse = await client.invoke(summaryMessages, {
+          model: 'doubao-seed-2-0-lite-260215',
+          temperature: 0.5,
+        });
+
+        if (summaryResponse.content) {
+          let jsonStr = summaryResponse.content
+            .replace(/^```json\s*/i, '').replace(/\s*```$/i, '')
+            .replace(/^```\s*/i, '').replace(/\s*```$/i, '');
+          const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            summary = JSON.parse(jsonMatch[0]);
+          }
+        }
+      } catch (e) {
+        console.error('[LLM] 摘要生成失败:', e);
+        // 摘要失败不影响词云返回
+      }
     }
 
     return NextResponse.json({
       success: true,
       chunkId,
       words,
+      summary,
       textLength: text.length,
-      usedFallback: words.length > 0 && !response.content,
+      subject,
+      usedFallback: false,
     });
+
   } catch (error) {
-    console.error('[LLM] 关键词分析错误:', error);
+    console.error('[LLM] 分析错误:', error);
     const errorMessage = error instanceof Error ? error.message : '未知错误';
-    
-    // Try fallback on error
+
     try {
       const body = await request.clone().json();
       const text = body?.text;
       if (text) {
-        console.log('[LLM] API错误，使用fallback函数');
-        const words = simpleWordAnalysis(text);
+        const words = simpleWordAnalysis(text, body?.subject || 'general');
         return NextResponse.json({
           success: true,
           chunkId: body?.chunkId,
           words,
+          summary: null,
           textLength: text.length,
           usedFallback: true,
           error: errorMessage,
@@ -120,113 +227,56 @@ export async function POST(request: NextRequest) {
     } catch {}
 
     return NextResponse.json(
-      { 
-        error: '关键词分析失败',
-        details: errorMessage
-      },
+      { error: '关键词分析失败', details: errorMessage },
       { status: 500 }
     );
   }
 }
 
-// Enhanced fallback simple word frequency analysis with better filtering
-function simpleWordAnalysis(text: string): WordWeight[] {
-  // Expanded stop words list (including filler words and meaningless phrases)
+// ─── Fallback 词频统计（支持学科权重） ───────────────────────
+function simpleWordAnalysis(text: string, subject = 'general'): WordWeight[] {
   const stopWords = new Set([
-    // Common function words
     '的', '了', '和', '是', '就', '都', '而', '及', '与', '着', '或', '一个',
     '没有', '我们', '你们', '他们', '这个', '那个', '什么', '怎么', '如何',
     '为什么', '可以', '要', '不要', '会', '不会', '能', '不能', '不是', '有',
-    '没有', '在', '也', '很', '但', '但是', '因为', '所以', '如果', '虽然',
-    '然后', '而且', '或者', '还是', '不过', '只是', '还', '已经', '正在',
-    '现在', '这里', '那里', '自己', '别人', '大家', '你', '他', '她', '它',
-    '们', '得', '地', '啊', '呀', '吧', '呢', '吗', '哦', '嗯', '哈', '嘿',
-    '这个', '那个', '就是', '那么', '这么', '什么', '怎样',
-    // Filler words
-    '好的', '好的好的', '嗯嗯', '对对', '对对对', '好吧', '行', '行吧', '好的吧',
-    'OK', 'ok', '好', '我看', '我觉得', '你知道', '就是', '然后呢', '后来',
-    '这样', '那样', '怎么样', '干嘛', '干吗', '不干嘛', '没干嘛',
-    '其实', '实际上', '基本上', '大概', '可能', '应该', '好像', '大概',
-    '差不多', '一般来说', '通常', '一般', '有时候', '偶尔', '经常',
-    '真的', '真的是', '老实说', '说实话', '说真的', '其实说实话',
-    // Question words
-    '谁', '哪儿', '哪里', '哪', '哪个', '哪些', '谁的', '多少', '几',
-    // Demonstratives and pronouns
-    '这些', '那些', '这种', '那种', '各位', '大伙', '咱们', '俺', '咱',
-    // Time words that are too generic
-    '今天', '明天', '昨天', '以前', '以前', '之后', '之前', '后来',
-    '刚才', '刚才的', '马上', '立刻', '一下', '一会儿', '等一下',
-    // Negations and common phrases
-    '不用', '不必', '无需', '无须', '不必了', '不用了',
-    '没错', '不错', '很好', '好的', '行', '可以', '好',
-    // Verb particles
-    '一下', '一下下', '一下子', '一点', '有点',
-    // Sentence starters
-    '那个那个', '呃呃', '呃', '嗯', '啊', '唉', '哎',
-    // Numbers and measurement words (not useful alone)
-    '一下', '一点', '一些', '各种', '各种各样',
-    // Generic words
-    '东西', '事情', '问题', '情况', '样子', '感觉',
+    '在', '也', '很', '但', '但是', '因为', '所以', '如果', '虽然', '然后',
+    '而且', '或者', '还是', '不过', '只是', '还', '已经', '正在', '现在',
+    '这里', '那里', '自己', '别人', '大家', '你', '他', '她', '它', '们',
+    '得', '地', '啊', '呀', '吧', '呢', '吗', '哦', '嗯', '哈', '嘿',
+    '就是', '那么', '这么', '怎样', '好的', '对对', '其实', '实际上',
+    '基本上', '大概', '可能', '应该', '好像', '差不多', '一般', '经常',
+    '真的', '谁', '哪里', '哪', '哪个', '多少', '这些', '那些', '各位',
+    '今天', '明天', '昨天', '以前', '之后', '之前', '后来', '刚才', '马上',
+    '一下', '一会儿', '一点', '有点', '东西', '事情', '问题', '情况',
   ]);
 
-  // Geography-related words (higher weight)
-  const geoWords = new Set([
-    '中国', '世界', '亚洲', '欧洲', '美洲', '韧性城市', '窑洞', '木质', '材料', '抗震', 'AI', '地质灾害', 
+  const subjectKeywords = SUBJECT_WEIGHT_KEYWORDS[subject] || SUBJECT_WEIGHT_KEYWORDS.general;
 
-    '山脉', '高原', '平原', '盆地', '丘陵', 
-    '气候', '气温', '降水',
-    '地形', '地貌', '地势', '海拔', '资源', '能源', '矿产', '石油', '天然气',
-    '人口', '经济', '文化', '地理', '地图', '经度', '纬度', '赤道', '极地',
-    '陆地', '岛屿', '半岛', '海峡', '海湾', '海岸', '港口', '首都',   '火山', '地震', '板块', '农业', '工业',
-    '交通', '环境', '生态', '保护', '污染', '可持续发展',
-   '山区', '沿海', '内陆', 
-  ]);
-
-  // Education-related words (medium-high weight)
-  const eduWords = new Set([
-    '学习', '老师', '教师', '教学', '课程', '课堂', '教室', '学校',
-    '知识', '考试', '测验', '作业', '复习', '预习', '练习',  '教育',
-
-    '技巧', '研究', '实验', '观察', '分析', '总结', '概念', '原理', '规律',
-    '理论', '模型', '公式', '定律', '案例', '实践', '应用', '创新', '创造',
-    '培养', '成长', '发展', '指导', '讲解', '示范', '提问', '回答', '讨论',
-    '交流', '合作', '团队', '项目', '任务', '目标', '计划', '实施', '评估',
-  ]);
-
-  // Split text into words and filter
   const words = text
     .replace(/[，。！？、；：""''【】《》（）\s,\.!?;:'"()\[\]\{\}]/g, ' ')
     .split(/\s+/)
     .filter((word) => {
-      // Filter out stop words
       if (stopWords.has(word)) return false;
-      // Filter out words that are too short or too long
       if (word.length < 2 || word.length > 5) return false;
-      // Filter out words with numbers or special characters
       if (/[0-9a-zA-Z]/.test(word)) return false;
       return true;
     });
 
-  // Count frequency
   const countMap = new Map<string, number>();
   words.forEach((word) => {
     countMap.set(word, (countMap.get(word) || 0) + 1);
   });
 
-  // Calculate weights with category boost
   const result: WordWeight[] = [];
   countMap.forEach((count, word) => {
     let weight = count;
-    if (geoWords.has(word)) {
+    if (subjectKeywords.high.includes(word)) {
       weight = count * 3;
-    } else if (eduWords.has(word)) {
-      weight = count * 2.5;
+    } else if (subjectKeywords.medium.includes(word)) {
+      weight = count * 2;
     }
     result.push({ word, weight });
   });
 
-  // Sort by weight descending
-  result.sort((a, b) => b.weight - a.weight);
-
-  return result.slice(0, 50);
+  return result.sort((a, b) => b.weight - a.weight).slice(0, 50);
 }

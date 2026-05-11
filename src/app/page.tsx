@@ -33,7 +33,7 @@ interface ClassSummary {
   suggestions: string[];
 }
 
-type AppStatus = 'recording' | 'generating' | 'completed';
+type AppStatus = 'idle' | 'recording' | 'generating' | 'completed';
 
 // ─── 学科配置 ─────────────────────────────────────────────────
 const SUBJECTS = [
@@ -202,7 +202,7 @@ function SubjectSelector({
 
 // ─── 主页面 ───────────────────────────────────────────────────
 export default function HomePage() {
-  const [status, setStatus] = useState<AppStatus>('recording');
+  const [status, setStatus] = useState<AppStatus>('idle');
   const [transcript, setTranscript] = useState('');
   const [processedResults, setProcessedResults] = useState<ProcessedResult[]>([]);
   const [showWordCloud, setShowWordCloud] = useState(false);
@@ -283,6 +283,10 @@ export default function HomePage() {
     setRecordingStopped(true);
   }, []);
 
+  const handleRecordingStart = useCallback(() => {
+    setStatus('recording');
+  }, []);
+
   // 生成词云，同时触发摘要生成
   const handleGenerateWordCloud = useCallback(() => {
     if (processedResults.length > 0 || transcript.length > 0) {
@@ -333,7 +337,7 @@ export default function HomePage() {
   }, [pasteText, subject]);
 
   const handleReset = useCallback(() => {
-    setStatus('recording');
+    setStatus('idle');
     setTranscript('');
     setProcessedResults([]);
     setShowWordCloud(false);
@@ -445,6 +449,7 @@ export default function HomePage() {
             onProgressUpdate={handleProgressUpdate}
             onAutoStop={handleAutoStop}
             onRecordingStopped={handleRecordingStopped}
+            onRecordingStart={handleRecordingStart}
           />
           {ProgressSection}
           {GenerateSection}
@@ -467,6 +472,7 @@ export default function HomePage() {
               onProgressUpdate={handleProgressUpdate}
               onAutoStop={handleAutoStop}
               onRecordingStopped={handleRecordingStopped}
+            onRecordingStart={handleRecordingStart}
             />
             {ProgressSection}
             {GenerateSection}

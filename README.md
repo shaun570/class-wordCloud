@@ -1,11 +1,14 @@
-# 会议助手
+# 课堂智析助手
 
-跨平台会议录音转词云 Web 应用，支持电脑、手机、平板。
+跨平台课堂录音分析 Web 应用，支持电脑、手机、平板。
 
 ## 功能
 
-- **录音转词云**：会议录音 → 实时转文字 → 生成带权重词云
-- **粘贴文稿转词云**：粘贴会议记录文稿 → 生成词云
+- **录音转词云 + 课堂分析**：课堂录音 → 实时转文字 → 生成带权重词云 + AI课堂分析报告
+- **粘贴文稿转词云**：粘贴课堂文稿 → 生成词云 + AI课堂分析报告
+- **9大学科支持**：地理、历史、语文、数学、英语、物理、化学、生物、通用
+- **学科感知权重**：不同学科使用不同的关键词权重配置
+- **AI课堂分析报告**：主要话题、教学脉络、反复强调的概念、教学建议
 - **流水线处理**：每 3 分钟自动分割音频，后台并行 ASR + LLM 处理
 - **词云例图**：录音结束后可查看词云例图参考
 
@@ -55,28 +58,14 @@ src/
 ├── app/
 │   ├── page.tsx              # 主页面
 │   ├── layout.tsx            # 布局组件
-│   ├── globals.css           # 全局样式（绿色主题）
 │   └── api/
 │       ├── transcribe/       # ASR 转写 API
-│       └── analyze-words/    # LLM 权重分析 API
+│       └── analyze-words/    # LLM 权重分析 + 课堂摘要 API
 ├── components/
-│   ├── MeetingRecorder.tsx   # 录音组件（流水线核心）
+│   ├── MeetingRecorder.tsx   # 录音组件
 │   ├── TranscriptView.tsx    # 转写预览组件
 │   └── WordCloud.tsx         # 词云组件
-├── hooks/
-│   ├── useSpeechRecognition.ts
-│   ├── useSilenceDetection.ts
-│   └── use-mobile.ts
-└── lib/
-    └── utils.ts
-
-public/
-└── wordcloud-example.png     # 词云例图
-```
-
-## 代码检查
-
-```bash
-pnpm lint       # ESLint 检查
-pnpm ts-check   # TypeScript 类型检查
+└── hooks/
+    ├── useSilenceDetection.ts
+    └── use-mobile.ts
 ```

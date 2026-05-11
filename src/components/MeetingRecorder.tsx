@@ -27,6 +27,7 @@ interface MeetingRecorderProps {
   onAutoStop?: () => void;
   onProgressUpdate?: (progress: { completed: number; processing: number; pending: number; failed: number }) => void;
   onRecordingStopped?: () => void;
+  onRecordingStart?: () => void;
 }
 
 type RecordingStatus = 'idle' | 'requesting' | 'recording' | 'stopped';
@@ -41,6 +42,7 @@ export function MeetingRecorder({
   onAutoStop,
   onProgressUpdate,
   onRecordingStopped,
+  onRecordingStart,
 }: MeetingRecorderProps) {
   const [status, setStatus] = useState<RecordingStatus>('idle');
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -274,6 +276,7 @@ export function MeetingRecorder({
       mediaRecorderRef.current = mediaRecorder;
       mediaRecorder.start(1000);
       setStatus('recording');
+      onRecordingStart?.();
 
       // Start timers
       setElapsedTime(0);

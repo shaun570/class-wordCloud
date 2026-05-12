@@ -5,7 +5,7 @@ import { MeetingRecorder } from '@/components/MeetingRecorder';
 import { TranscriptView } from '@/components/TranscriptView';
 import dynamic from 'next/dynamic';
 import { Button } from '@/components/ui/button';
-import { Cloud, FileText, X, Loader2, BookOpen, Lightbulb, BarChart2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Cloud, FileText, X, Loader2, BookOpen, Lightbulb, BarChart2, ChevronDown, ChevronUp, FileDown } from 'lucide-react';
 
 const WordCloud = dynamic(
   () => import('@/components/WordCloud').then((mod) => mod.WordCloud),
@@ -217,6 +217,307 @@ export default function HomePage() {
   const [classSummary, setClassSummary] = useState<ClassSummary | null>(null);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
 
+    // 词云图片获取函数（由WordCloud子组件传入）
+  const [getWordCloudImage, setGetWordCloudImage] = useState<(() => string | null) | null>(null);
+
+  // 词云就绪回调
+  const handleChartReady = useCallback((getImageFn: () => string | null) => {
+    setGetWordCloudImage(() => getImageFn);
+  }, []);
+
+  // ── 导出课堂报告（浏览器打印） ───────────────────────────────
+  const handleExportReport = useCallback(() => {
+    const imageDataURL = getWordCloudImage?.() ?? null;
+    const subjectLabel = SUBJECTS.find(s => s.value === subject)?.label ?? '通用';
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
+    const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+    // Top 20 关键词
+    const topWords = [...processedResults]
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, 20);
+
+    // 构建打印页面 HTML
+    const printHTML = `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>课堂分析报告</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #1a1a1a;
+      padding: 40px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    /* 页眉 */
+    .header {
+      border-bottom: 3px solid #22c55e;
+      padding-bottom: 16px;
+      margin-bottom: 28px;
+    }
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .title { font-size: 24px; font-weight: bold; color: #15803d; }
+    .subtitle { font-size: 13px; color: #6b7280; margin-top: 4px; }
+    .meta { text-align: right; font-size: 12px; color: #6b7280; line-height: 1.8; }
+    .subject-badge {
+      display: inline-block;
+      background: #dcfce7;
+      color: #15803d;
+      border: 1px solid #86efac;
+      border-radius: 20px;
+      padding: 3px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-top: 8px;
+    }
+
+    /* 区块通用 */
+    .section { margin-bottom: 28px; }
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #374151;
+      border-left: 4px solid #22c55e;
+      padding-left: 10px;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* 知识点标签 */
+    .tags { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tag {
+      background: #f0fdf4;
+      color: #15803d;
+      border: 1px solid #bbf7d0;
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    /* 教学脉络 */
+    .flow-box {
+      background: #eff6ff;
+      border-left: 4px solid #93c5fd;
+      padding: 12px 16px;
+      border-radius: 0 8px 8px 0;
+      font-size: 14px;
+      line-height: 1.8;
+      color: #1e40af;
+    }
+
+    /* 重点概念 */
+    .concept-tag {
+      background: #fffbeb;
+      color: #92400e;
+      border: 1px solid #fde68a;
+      border-radius: 6px;
+      padding: 3px 10px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    /* 建议列表 */
+    .suggestions { list-style: none; }
+    .suggestions li {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid #f3f4f6;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .suggestions li:last-child { border-bottom: none; }
+    .suggest-num {
+      width: 22px; height: 22px;
+      background: #ede9fe;
+      color: #7c3aed;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: bold;
+      flex-shrink: 0;
+    }
+
+    /* 词云图 */
+    .wordcloud-img {
+      width: 100%;
+      max-height: 320px;
+      object-fit: contain;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      background: #fff;
+    }
+    .no-wordcloud {
+      height: 120px;
+      border: 2px dashed #d1fae5;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6b7280;
+      font-size: 13px;
+    }
+
+    /* 关键词表格 */
+    .keyword-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+    }
+    .keyword-item {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .keyword-name { font-weight: 600; color: #374151; }
+    .keyword-weight { color: #9ca3af; font-size: 11px; }
+
+    /* 页脚 */
+    .footer {
+      margin-top: 36px;
+      padding-top: 16px;
+      border-top: 1px solid #e5e7eb;
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #9ca3af;
+    }
+    .ai-badge {
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 10px;
+    }
+
+    @media print {
+      body { padding: 20px; }
+      @page { margin: 15mm; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 页眉 -->
+  <div class="header">
+    <div class="header-top">
+      <div>
+        <div class="title">📊 课堂分析报告</div>
+        <div class="subtitle">课堂智析助手 · AI辅助教学分析</div>
+        <div class="subject-badge">${subjectLabel}</div>
+      </div>
+      <div class="meta">
+        <div>${dateStr}</div>
+        <div>${timeStr}</div>
+      </div>
+    </div>
+  </div>
+
+  ${classSummary ? `
+  <!-- 知识点 -->
+  ${classSummary.mainTopics?.length > 0 ? `
+  <div class="section">
+    <div class="section-title">📚 本节课知识点</div>
+    <div class="tags">
+      ${classSummary.mainTopics.map((t, i) => `<span class="tag">${i + 1}. ${t}</span>`).join('')}
+    </div>
+  </div>` : ''}
+
+  <!-- 教学脉络 -->
+  ${classSummary.teachingFlow ? `
+  <div class="section">
+    <div class="section-title">🌊 教学脉络</div>
+    <div class="flow-box">${classSummary.teachingFlow}</div>
+  </div>` : ''}
+
+  <!-- 重点概念 -->
+  ${classSummary.keyConceptsRepeated?.length > 0 ? `
+  <div class="section">
+    <div class="section-title">🔑 重点强调概念</div>
+    <div class="tags">
+      ${classSummary.keyConceptsRepeated.map(c => `<span class="concept-tag">${c}</span>`).join('')}
+    </div>
+  </div>` : ''}
+
+  <!-- 教学建议 -->
+  ${classSummary.suggestions?.length > 0 ? `
+  <div class="section">
+    <div class="section-title">💡 教学建议</div>
+    <ul class="suggestions">
+      ${classSummary.suggestions.map((s, i) => `
+        <li>
+          <span class="suggest-num">${i + 1}</span>
+          <span>${s}</span>
+        </li>`).join('')}
+    </ul>
+  </div>` : ''}
+  ` : '<div class="section"><p style="color:#6b7280;font-size:14px;">本次未生成课堂分析（文本内容不足）</p></div>'}
+
+  <!-- 词云图 -->
+  <div class="section">
+    <div class="section-title">☁️ 词云图</div>
+    ${imageDataURL
+      ? `<img class="wordcloud-img" src="${imageDataURL}" alt="词云图" />`
+      : `<div class="no-wordcloud">词云图不可用</div>`
+    }
+  </div>
+
+  <!-- Top 20 关键词 -->
+  ${topWords.length > 0 ? `
+  <div class="section">
+    <div class="section-title">🏆 Top 20 关键词</div>
+    <div class="keyword-grid">
+      ${topWords.map((w, i) => `
+        <div class="keyword-item">
+          <span class="keyword-name">${i + 1}. ${w.word}</span>
+          <span class="keyword-weight">${w.weight.toFixed(1)}</span>
+        </div>`).join('')}
+    </div>
+  </div>` : ''}
+
+  <!-- 页脚 -->
+  <div class="footer">
+    <span>课堂智析助手 · 豆包大模型（字节跳动）提供 AI 支持</span>
+    <span class="ai-badge">AI生成内容，仅供参考</span>
+  </div>
+
+</body>
+</html>`;
+
+    // 打开打印窗口
+    const printWindow = window.open('', '_blank', 'width=900,height=700');
+    if (!printWindow) {
+      alert('请允许弹出窗口以导出报告');
+      return;
+    }
+    printWindow.document.write(printHTML);
+    printWindow.document.close();
+
+    // 等待图片加载后触发打印
+    printWindow.onload = () => {
+      setTimeout(() => {
+        printWindow.print();
+      }, 500);
+    };
+  }, [getWordCloudImage, subject, classSummary, processedResults]);
+  
   // 粘贴文稿弹框
   const [showPasteDialog, setShowPasteDialog] = useState(false);
   const [pasteText, setPasteText] = useState('');
@@ -382,16 +683,30 @@ export default function HomePage() {
   );
 
   // ── 生成按钮区块 ──────────────────────────────────────────────
-  const GenerateSection = recordingStopped && allChunksProcessed && (
-    <Button
-      onClick={handleGenerateWordCloud}
-      size="lg"
-      className="w-full bg-green-500 hover:bg-green-600 text-white"
-      disabled={!hasContent}
-    >
-      <Cloud className="mr-2 h-5 w-5" />
-      生成词云 + 课堂分析
-    </Button>
+    const GenerateSection = recordingStopped && allChunksProcessed && (
+    <div className="space-y-2">
+      <Button
+        onClick={handleGenerateWordCloud}
+        size="lg"
+        className="w-full bg-green-500 hover:bg-green-600 text-white"
+        disabled={!hasContent}
+      >
+        <Cloud className="mr-2 h-5 w-5" />
+        生成词云 + 课堂分析
+      </Button>
+      {/* 词云生成后显示导出按钮 */}
+      {showWordCloud && (
+        <Button
+          onClick={handleExportReport}
+          size="lg"
+          variant="outline"
+          className="w-full border-green-300 text-green-700 hover:bg-green-50"
+        >
+          <FileDown className="mr-2 h-5 w-5" />
+          导出课堂报告（PDF）
+        </Button>
+      )}
+    </div>
   );
 
   // ── 摘要区块 ─────────────────────────────────────────────────
@@ -456,8 +771,13 @@ export default function HomePage() {
           {SummarySection}
           <TranscriptView transcript={transcript} isRecording={isRecording} />
           {showWordCloud && (
-            <WordCloud processedResults={processedResults} onReset={handleReset} />
+            <WordCloud
+            processedResults={processedResults}
+            onReset={handleReset}
+            onChartReady={handleChartReady}
+           />
           )}
+          
         </div>
 
         {/* Desktop Layout */}
@@ -484,8 +804,12 @@ export default function HomePage() {
 
           {/* 右栏 */}
           <div className="flex flex-col">
-            {showWordCloud ? (
-              <WordCloud processedResults={processedResults} onReset={handleReset} />
+           {showWordCloud ? (
+  <WordCloud
+    processedResults={processedResults}
+    onReset={handleReset}
+    onChartReady={handleChartReady}
+  />
             ) : (
               <div className="flex-1 flex items-center justify-center bg-white rounded-lg border-2 border-dashed border-green-200">
                 <div className="text-center px-8">

@@ -168,7 +168,7 @@ export async function POST(request: NextRequest) {
     // ── 步骤2：课堂摘要生成（仅当 generateSummary=true 且文本足够长时） ──
     let summary: ClassSummary | null = null;
 
-    if (generateSummary && text.length > 100) {
+    if (generateSummary && text.length > 20) {
       try {
         const summaryMessages = [
           { role: 'system' as const, content: buildSummaryPrompt(subject) },

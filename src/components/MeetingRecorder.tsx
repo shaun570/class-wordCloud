@@ -130,6 +130,7 @@ export function MeetingRecorder({
       }
 
       const { text: transcript, isSilent } = await transcribeResponse.json();
+      console.log(`[Chunk ${chunk.id}] isSilent=${isSilent}, textLength=${transcript?.length}, text="${transcript?.slice(0, 50)}"`);
 
       // If this is a silent chunk, mark as completed with empty text (not an error)
       if (isSilent) {

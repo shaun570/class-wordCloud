@@ -1,9 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Mic, MicOff, Square, Loader2, CheckCircle, AlertCircle, XCircle } from 'lucide-react';
+import { Mic, MicOff, Square, Loader2, AlertCircle } from 'lucide-react';
 
 interface AudioChunk {
   id: number;
@@ -21,19 +19,24 @@ interface ProcessedResult {
 }
 
 interface MeetingRecorderProps {
-  subject?: string;   
+  subject?: string;
   onTranscriptChange?: (fullTranscript: string) => void;
   onProcessedResultsChange?: (results: ProcessedResult[]) => void;
   onAutoStop?: () => void;
-  onProgressUpdate?: (progress: { completed: number; processing: number; pending: number; failed: number }) => void;
+  onProgressUpdate?: (progress: {
+    completed: number;
+    processing: number;
+    pending: number;
+    failed: number;
+  }) => void;
   onRecordingStopped?: () => void;
   onRecordingStart?: () => void;
 }
 
 type RecordingStatus = 'idle' | 'requesting' | 'recording' | 'stopped';
 
-const CHUNK_DURATION_MS = 3 * 60 * 1000; // 3 minutes
-const MAX_RECORDING_MS = 2 * 60 * 60 * 1000; // 2 hours
+const CHUNK_DURATION_MS = 3 * 60 * 1000;
+const MAX_RECORDING_MS  = 2 * 60 * 60 * 1000;
 
 export function MeetingRecorder({
   subject = 'general',
@@ -44,51 +47,46 @@ export function MeetingRecorder({
   onRecordingStopped,
   onRecordingStart,
 }: MeetingRecorderProps) {
-  const [status, setStatus] = useState<RecordingStatus>('idle');
+  const [status, setStatus]           = useState<RecordingStatus>('idle');
   const [elapsedTime, setElapsedTime] = useState(0);
-  const [chunks, setChunks] = useState<AudioChunk[]>([]);
-  const [warnings, setWarnings] = useState<string[]>([]);
+  const [chunks, setChunks]           = useState<AudioChunk[]>([]);
+  const [warnings, setWarnings]       = useState<string[]>([]);
 
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const chunkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mediaStreamRef      = useRef<MediaStream | null>(null);
+  const mediaRecorderRef    = useRef<MediaRecorder | null>(null);
+  const chunksRef           = useRef<Blob[]>([]);
+  const timerRef            = useRef<ReturnType<typeof setInterval> | null>(null);
+  const chunkTimerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
   const keepAliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const silenceStartRef = useRef<number | null>(null);
-  const processingRef = useRef<Set<number>>(new Set());
-  const chunkIdCounterRef = useRef(0);
-  const stopRecordingRef = useRef<() => void>(() => {});
+  const processingRef       = useRef<Set<number>>(new Set());
+  const chunkIdCounterRef   = useRef(0);
+  const stopRecordingRef    = useRef<() => void>(() => {});
 
   const fullTranscript = chunks
     .filter((c) => c.status === 'completed' && c.transcript)
     .map((c) => c.transcript!)
     .join('');
 
-  // Keep page alive by playing silent audio periodically
+  // ── Keep alive ───────────────────────────────────────────────
   const startKeepAlive = useCallback(() => {
     const audioContext = new AudioContext();
-    const bufferSize = audioContext.sampleRate * 1;
+    const bufferSize   = audioContext.sampleRate * 1;
     const silentBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const output = silentBuffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      output[i] = 0;
-    }
+    const output       = silentBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) output[i] = 0;
 
-    const playSilentAudio = () => {
+    const play = () => {
       if (!audioContext || audioContext.state === 'closed') return;
       try {
-        const source = audioContext.createBufferSource();
-        source.buffer = silentBuffer;
-        source.connect(audioContext.destination);
-        source.start();
-      } catch {
-        // Ignore
-      }
+        const src = audioContext.createBufferSource();
+        src.buffer = silentBuffer;
+        src.connect(audioContext.destination);
+        src.start();
+      } catch { /* ignore */ }
     };
 
-    playSilentAudio();
-    keepAliveIntervalRef.current = setInterval(playSilentAudio, 2000);
+    play();
+    keepAliveIntervalRef.current = setInterval(play, 2000);
   }, []);
 
   const stopKeepAlive = useCallback(() => {
@@ -98,144 +96,93 @@ export function MeetingRecorder({
     }
   }, []);
 
-  // Process a single chunk through ASR and LLM
+  // ── Process chunk ────────────────────────────────────────────
   const processChunk = useCallback(async (chunk: AudioChunk) => {
     if (processingRef.current.has(chunk.id)) return;
     processingRef.current.add(chunk.id);
 
     try {
-      // Determine file extension from MIME type
-      const mimeType = chunk.blob.type;
-      let extension = 'ogg';
-      if (mimeType.includes('mp4') || mimeType.includes('m4a')) {
-        extension = 'm4a';
-      } else if (mimeType.includes('webm')) {
-        extension = 'webm';
-      } else if (mimeType.includes('wav')) {
-        extension = 'wav';
-      }
+      const mimeType  = chunk.blob.type;
+      let extension   = 'ogg';
+      if (mimeType.includes('mp4') || mimeType.includes('m4a')) extension = 'm4a';
+      else if (mimeType.includes('webm')) extension = 'webm';
+      else if (mimeType.includes('wav'))  extension = 'wav';
 
-      // Step 1: ASR transcription
       const formData = new FormData();
-      formData.append('audio', chunk.blob, `chunk-${chunk.id}.${extension}`);
+      formData.append('audio',   chunk.blob, `chunk-${chunk.id}.${extension}`);
       formData.append('chunkId', String(chunk.id));
 
-      const transcribeResponse = await fetch('/api/transcribe', {
-        method: 'POST',
-        body: formData,
-      });
+      const transcribeRes = await fetch('/api/transcribe', { method: 'POST', body: formData });
+      if (!transcribeRes.ok) throw new Error('Transcription failed');
 
-      if (!transcribeResponse.ok) {
-        throw new Error('Transcription failed');
-      }
+      const { text: transcript, isSilent } = await transcribeRes.json();
+      console.log(`[Chunk ${chunk.id}] isSilent=${isSilent}, len=${transcript?.length}, text="${transcript?.slice(0, 50)}"`);
 
-      const { text: transcript, isSilent } = await transcribeResponse.json();
-      console.log(`[Chunk ${chunk.id}] isSilent=${isSilent}, textLength=${transcript?.length}, text="${transcript?.slice(0, 50)}"`);
-
-      // If this is a silent chunk, mark as completed with empty text (not an error)
       if (isSilent) {
         setChunks((prev) =>
-          prev.map((c) =>
-            c.id === chunk.id
-              ? { ...c, status: 'completed', transcript: '' }
-              : c
-          )
+          prev.map((c) => c.id === chunk.id ? { ...c, status: 'completed', transcript: '' } : c)
         );
         processingRef.current.delete(chunk.id);
         return;
       }
 
-      // Step 2: LLM word analysis
-      const analyzeResponse = await fetch('/api/analyze-words', {
-        method: 'POST',
+      const analyzeRes = await fetch('/api/analyze-words', {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: transcript, chunkId: chunk.id, subject }),
+        body:    JSON.stringify({ text: transcript, chunkId: chunk.id, subject }),
       });
+      if (!analyzeRes.ok) throw new Error('Word analysis failed');
 
-      if (!analyzeResponse.ok) {
-        throw new Error('Word analysis failed');
-      }
-
-      const { words } = await analyzeResponse.json();
-
-      // Update chunk status
+      const { words } = await analyzeRes.json();
       setChunks((prev) =>
-        prev.map((c) =>
-          c.id === chunk.id
-            ? { ...c, status: 'completed', transcript, words }
-            : c
-        )
+        prev.map((c) => c.id === chunk.id ? { ...c, status: 'completed', transcript, words } : c)
       );
     } catch (error) {
-      console.error(`Chunk ${chunk.id} processing failed:`, error);
-
-      // Retry once
+      console.error(`Chunk ${chunk.id} failed:`, error);
       if ((chunk.retryCount || 0) < 1) {
         setChunks((prev) =>
-          prev.map((c) =>
-            c.id === chunk.id
-              ? { ...c, status: 'pending', retryCount: (c.retryCount || 0) + 1 }
-              : c
-          )
+          prev.map((c) => c.id === chunk.id
+            ? { ...c, status: 'pending', retryCount: (c.retryCount || 0) + 1 }
+            : c)
         );
-        // Retry after 2 seconds
         setTimeout(() => processChunk({ ...chunk, retryCount: (chunk.retryCount || 0) + 1 }), 2000);
       } else {
-        // Give up, mark as failed
         setChunks((prev) =>
-          prev.map((c) =>
-            c.id === chunk.id ? { ...c, status: 'failed' } : c
-          )
+          prev.map((c) => c.id === chunk.id ? { ...c, status: 'failed' } : c)
         );
         setWarnings((prev) => [...prev, `片段 ${chunk.id} 处理失败，已跳过`]);
       }
     } finally {
       processingRef.current.delete(chunk.id);
     }
-  }, []);
+  }, [subject]);
 
-  // Start a new chunk recording: stop current recorder → collect data → restart
+  // ── Chunk rotation ───────────────────────────────────────────
   const startNewChunk = useCallback(() => {
     const recorder = mediaRecorderRef.current;
     if (!recorder || recorder.state === 'inactive') return;
-
-    // If no data collected yet, nothing to do
     if (chunksRef.current.length === 0) return;
 
-    // Stop the recorder - this triggers final ondataavailable + onstop
     recorder.stop();
-
-    // The onstop handler will collect data, process it, and restart recording
     recorder.onstop = () => {
       if (chunksRef.current.length > 0) {
-        const chunkId = chunkIdCounterRef.current++;
-        const mimeType = recorder.mimeType || 'audio/ogg';
+        const chunkId   = chunkIdCounterRef.current++;
+        const mimeType  = recorder.mimeType || 'audio/ogg';
         const audioBlob = new Blob(chunksRef.current, { type: mimeType });
 
-        setChunks((prev) => [
-          ...prev,
-          { id: chunkId, blob: audioBlob, status: 'pending' },
-        ]);
-
-        // Trigger processing
-        setTimeout(() => {
-          processChunk({ id: chunkId, blob: audioBlob, status: 'pending' });
-        }, 100);
-
+        setChunks((prev) => [...prev, { id: chunkId, blob: audioBlob, status: 'pending' }]);
+        setTimeout(() => processChunk({ id: chunkId, blob: audioBlob, status: 'pending' }), 100);
         chunksRef.current = [];
       }
 
-      // Restart recording for next chunk - new recording gets a fresh container header
       if (mediaRecorderRef.current && mediaStreamRef.current) {
-        try {
-          mediaRecorderRef.current.start(1000);
-        } catch (e) {
-          console.error('[Recorder] Failed to restart recording:', e);
-        }
+        try { mediaRecorderRef.current.start(1000); }
+        catch (e) { console.error('[Recorder] restart failed:', e); }
       }
     };
   }, [processChunk]);
 
+  // ── Start recording ──────────────────────────────────────────
   const startRecording = useCallback(async () => {
     try {
       setStatus('requesting');
@@ -245,155 +192,102 @@ export function MeetingRecorder({
       chunksRef.current = [];
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          sampleRate: 16000,
-        },
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: 16000 },
       });
-
       mediaStreamRef.current = stream;
 
-      // Try OGG OPUS first (supported by ASR), fallback to MP3 or webm
       let mimeType = 'audio/ogg;codecs=opus';
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = 'audio/mp4';
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = 'audio/webm;codecs=opus';
-        }
+        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'audio/webm;codecs=opus';
       }
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType,
-      });
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunksRef.current.push(event.data);
-        }
-      };
-
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       mediaRecorderRef.current = mediaRecorder;
       mediaRecorder.start(1000);
       setStatus('recording');
       onRecordingStart?.();
 
-      // Start timers
       setElapsedTime(0);
       timerRef.current = setInterval(() => {
         setElapsedTime((prev) => {
-          const newTime = prev + 1;
-          // Auto-stop after 2 hours
-          if (newTime >= MAX_RECORDING_MS / 1000) {
-            stopRecordingRef.current();
-            onAutoStop?.();
-          }
-          return newTime;
+          const next = prev + 1;
+          if (next >= MAX_RECORDING_MS / 1000) { stopRecordingRef.current(); onAutoStop?.(); }
+          return next;
         });
       }, 1000);
 
-      // Chunk timer (every 3 minutes)
-      chunkTimerRef.current = setInterval(() => {
-        startNewChunk();
-      }, CHUNK_DURATION_MS);
-
-      // Keep page alive
+      chunkTimerRef.current = setInterval(startNewChunk, CHUNK_DURATION_MS);
       startKeepAlive();
     } catch (error) {
       console.error('Failed to start recording:', error);
       setStatus('idle');
     }
-  }, [onAutoStop, startKeepAlive, startNewChunk]);
+  }, [onAutoStop, startKeepAlive, startNewChunk, onRecordingStart]);
 
+  // ── Stop recording ───────────────────────────────────────────
   const stopRecording = useCallback(() => {
     const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== 'inactive') {
-      // Use onstop to collect final chunk data after recorder flushes
-      recorder.onstop = () => {
-        if (chunksRef.current.length > 0) {
-          const chunkId = chunkIdCounterRef.current++;
-          const mimeType = recorder.mimeType || 'audio/ogg';
-          const audioBlob = new Blob(chunksRef.current, { type: mimeType });
-          setChunks((prev) => [
-            ...prev,
-            { id: chunkId, blob: audioBlob, status: 'pending' },
-          ]);
-          processChunk({ id: chunkId, blob: audioBlob, status: 'pending' });
-          chunksRef.current = [];
-        }
 
-        // Stop the media stream
-        if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-          mediaStreamRef.current = null;
-        }
-
-        // Stop timers
-        if (timerRef.current) {
-          clearInterval(timerRef.current);
-          timerRef.current = null;
-        }
-        if (chunkTimerRef.current) {
-          clearInterval(chunkTimerRef.current);
-          chunkTimerRef.current = null;
-        }
-
-        stopKeepAlive();
-        setStatus('stopped');
-        onRecordingStopped?.();
-      };
-
-      recorder.stop();
-    } else {
-      // Recorder already stopped, just clean up
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-        mediaStreamRef.current = null;
-      }
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      if (chunkTimerRef.current) {
-        clearInterval(chunkTimerRef.current);
-        chunkTimerRef.current = null;
-      }
+    const cleanup = () => {
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
+      if (timerRef.current)      { clearInterval(timerRef.current);      timerRef.current = null; }
+      if (chunkTimerRef.current) { clearInterval(chunkTimerRef.current); chunkTimerRef.current = null; }
       stopKeepAlive();
       setStatus('stopped');
       onRecordingStopped?.();
+    };
+
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.onstop = () => {
+        if (chunksRef.current.length > 0) {
+          const chunkId   = chunkIdCounterRef.current++;
+          const mimeType  = recorder.mimeType || 'audio/ogg';
+          const audioBlob = new Blob(chunksRef.current, { type: mimeType });
+          setChunks((prev) => [...prev, { id: chunkId, blob: audioBlob, status: 'pending' }]);
+          processChunk({ id: chunkId, blob: audioBlob, status: 'pending' });
+          chunksRef.current = [];
+        }
+        cleanup();
+      };
+      recorder.stop();
+    } else {
+      cleanup();
     }
   }, [processChunk, stopKeepAlive, onRecordingStopped]);
 
-  // Keep stopRecording ref up to date
   stopRecordingRef.current = stopRecording;
 
-  // Update parent when transcript changes
-  useEffect(() => {
-    onTranscriptChange?.(fullTranscript);
-  }, [fullTranscript, onTranscriptChange]);
+  // ── Effects ──────────────────────────────────────────────────
+  useEffect(() => { onTranscriptChange?.(fullTranscript); }, [fullTranscript, onTranscriptChange]);
 
-  // Update processed results for word cloud
   useEffect(() => {
     const results: ProcessedResult[] = [];
     chunks.forEach((chunk) => {
       if (chunk.status === 'completed' && chunk.words) {
-        chunk.words.forEach((w) => {
-          results.push({ word: w.word, weight: w.weight, source: 'llm' });
-        });
+        chunk.words.forEach((w) => results.push({ word: w.word, weight: w.weight, source: 'llm' }));
       }
     });
     onProcessedResultsChange?.(results);
   }, [chunks, onProcessedResultsChange]);
 
-  // Update progress
   useEffect(() => {
-    const completed = chunks.filter((c) => c.status === 'completed').length;
+    const completed  = chunks.filter((c) => c.status === 'completed').length;
     const processing = chunks.filter((c) => c.status === 'processing').length;
-    const pending = chunks.filter((c) => c.status === 'pending').length;
-    const failed = chunks.filter((c) => c.status === 'failed').length;
+    const pending    = chunks.filter((c) => c.status === 'pending').length;
+    const failed     = chunks.filter((c) => c.status === 'failed').length;
     onProgressUpdate?.({ completed, processing, pending, failed });
   }, [chunks, onProgressUpdate]);
+
+  useEffect(() => {
+    return () => {
+      stopKeepAlive();
+      if (timerRef.current)      clearInterval(timerRef.current);
+      if (chunkTimerRef.current) clearInterval(chunkTimerRef.current);
+    };
+  }, [stopKeepAlive]);
 
   const resetRecording = useCallback(() => {
     setChunks([]);
@@ -402,122 +296,149 @@ export function MeetingRecorder({
     setStatus('idle');
   }, []);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopKeepAlive();
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (chunkTimerRef.current) clearInterval(chunkTimerRef.current);
-    };
-  }, [stopKeepAlive]);
-
-  // Format time
-  const formatTime = (seconds: number): string => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  const formatTime = (s: number) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
   };
 
   const completedChunks = chunks.filter((c) => c.status === 'completed').length;
-  const pendingChunks = chunks.filter((c) => c.status === 'pending').length;
-  const failedChunks = chunks.filter((c) => c.status === 'failed').length;
+  const pendingChunks   = chunks.filter((c) => c.status === 'pending').length;
+  const failedChunks    = chunks.filter((c) => c.status === 'failed').length;
+
+  // ── 状态配置 ─────────────────────────────────────────────────
+  const isRecording = status === 'recording';
 
   return (
-    <div className="space-y-4">
-      <Card className={status === 'recording' ? 'border-green-500 shadow-lg' : ''}>
-        <CardContent className="pt-6">
-          <div className="flex flex-col items-center gap-4">
-            {/* Status Display */}
-            <div className="text-center">
-              <div className="flex items-center justify-center gap-2 mb-2">
-                {status === 'recording' ? (
-                  <span className="relative flex h-3 w-3">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                  </span>
-                ) : status === 'requesting' ? (
-                  <Loader2 className="h-5 w-5 animate-spin text-green-500" />
-                ) : status === 'stopped' ? (
-                  <MicOff className="h-5 w-5 text-muted-foreground" />
-                ) : (
-                  <Mic className="h-5 w-5 text-muted-foreground" />
-                )}
-                <span className="text-lg font-medium">
-                  {status === 'idle' && '等待开始'}
-                  {status === 'requesting' && '正在请求权限...'}
-                  {status === 'recording' && '会议进行中'}
-                  {status === 'stopped' && '会议已结束'}
-                </span>
-              </div>
+    <div
+      className={[
+        'bg-white rounded-xl border shadow-sm overflow-hidden transition-all duration-300',
+        isRecording ? 'border-blue-400 shadow-blue-100 shadow-md' : 'border-gray-200',
+      ].join(' ')}
+    >
+      {/* 顶部色条 */}
+      <div
+        className={[
+          'h-1 w-full transition-all duration-500',
+          isRecording
+            ? 'bg-gradient-to-r from-blue-500 to-sky-400'
+            : status === 'stopped'
+            ? 'bg-gray-200'
+            : 'bg-blue-100',
+        ].join(' ')}
+      />
 
-              {/* Timer */}
-              <div className="text-3xl font-mono font-bold text-primary">
-                {formatTime(elapsedTime)}
-              </div>
+      <div className="px-6 py-6 flex flex-col items-center gap-5">
 
-              {/* Progress */}
-              {status === 'recording' && (
-                <div className="text-sm text-muted-foreground mt-2">
-                  <div>片段: {completedChunks} 已完成 | {pendingChunks} 待处理 | {failedChunks} 失败</div>
-                  {pendingChunks > 0 && (
-                    <div className="text-xs text-orange-500 mt-1">
-                      正在后台处理，请稍候...
-                    </div>
-                  )}
-                </div>
-              )}
+        {/* 状态标签 */}
+        <div className="flex items-center gap-2">
+          {status === 'recording' && (
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500" />
+            </span>
+          )}
+          {status === 'requesting' && <Loader2 className="h-4 w-4 animate-spin text-blue-500" />}
+          {status === 'stopped'    && <MicOff className="h-4 w-4 text-gray-400" />}
+          {status === 'idle'       && <Mic className="h-4 w-4 text-gray-400" />}
 
-              {/* Warnings */}
-              {warnings.length > 0 && (
-                <div className="mt-2 p-2 bg-yellow-50 rounded text-xs text-yellow-700">
-                  {warnings.map((w, i) => (
-                    <div key={i} className="flex items-center gap-1">
-                      <AlertCircle className="w-3 h-3" />
-                      {w}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+          <span className={[
+            'text-sm font-medium',
+            isRecording     ? 'text-blue-600' :
+            status==='stopped' ? 'text-gray-500' : 'text-gray-500',
+          ].join(' ')}>
+            {status === 'idle'       && '等待开始'}
+            {status === 'requesting' && '正在请求麦克风权限...'}
+            {status === 'recording'  && '录音进行中'}
+            {status === 'stopped'    && '录音已结束'}
+          </span>
+        </div>
 
-            {/* Control Buttons */}
-            <div className="flex gap-3 mt-4">
-              {status === 'idle' && (
-                <Button
-                  size="lg"
-                  onClick={startRecording}
-                  className="bg-green-500 hover:bg-green-600 text-white"
-                >
-                  <Mic className="mr-2 h-5 w-5" />
-                  会议开始
-                </Button>
-              )}
+        {/* 计时器 */}
+        <div className={[
+          'text-5xl font-mono font-bold tracking-widest tabular-nums transition-colors',
+          isRecording ? 'text-blue-600' : 'text-gray-300',
+        ].join(' ')}>
+          {formatTime(elapsedTime)}
+        </div>
 
-              {status === 'recording' && (
-                <Button
-                  size="lg"
-                  onClick={stopRecording}
-                  variant="destructive"
-                >
-                  <Square className="mr-2 h-5 w-5" />
-                  结束会议
-                </Button>
-              )}
-
-              {status === 'stopped' && (
-                <Button
-                  size="lg"
-                  onClick={resetRecording}
-                  variant="outline"
-                >
-                  重新开始
-                </Button>
-              )}
-            </div>
+        {/* 录音中进度提示 */}
+        {isRecording && (chunks.length > 0) && (
+          <div className="flex items-center gap-4 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2 w-full justify-center">
+            <span className="text-blue-600 font-medium">已完成 {completedChunks} 片段</span>
+            {pendingChunks > 0 && <span className="text-amber-500">处理中 {pendingChunks} 片段</span>}
+            {failedChunks  > 0 && <span className="text-red-400">失败 {failedChunks} 片段</span>}
           </div>
-        </CardContent>
-      </Card>
+        )}
+
+        {/* 警告 */}
+        {warnings.length > 0 && (
+          <div className="w-full bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 space-y-1">
+            {warnings.map((w, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-xs text-amber-700">
+                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                {w}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 操作按钮 */}
+        <div className="flex gap-3 w-full justify-center">
+          {status === 'idle' && (
+            <button
+              onClick={startRecording}
+              className="flex items-center gap-2 px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-sm hover:shadow transition-all text-sm"
+            >
+              <Mic className="h-4 w-4" />
+              开始录音
+            </button>
+          )}
+
+          {status === 'requesting' && (
+            <button
+              disabled
+              className="flex items-center gap-2 px-8 py-3 bg-blue-100 text-blue-400 font-semibold rounded-lg text-sm cursor-not-allowed"
+            >
+              <Loader2 className="h-4 w-4 animate-spin" />
+              正在获取权限...
+            </button>
+          )}
+
+          {status === 'recording' && (
+            <button
+              onClick={stopRecording}
+              className="flex items-center gap-2 px-8 py-3 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg shadow-sm hover:shadow transition-all text-sm"
+            >
+              <Square className="h-4 w-4" />
+              结束录音
+            </button>
+          )}
+
+          {status === 'stopped' && (
+            <button
+              onClick={resetRecording}
+              className="flex items-center gap-2 px-8 py-3 border border-blue-200 text-blue-600 hover:bg-blue-50 font-semibold rounded-lg text-sm transition-all"
+            >
+              <Mic className="h-4 w-4" />
+              重新录音
+            </button>
+          )}
+        </div>
+
+        {/* 提示文字 */}
+        {status === 'idle' && (
+          <p className="text-xs text-gray-400 text-center">
+            点击开始录音，系统将自动转写课堂语音并提取关键词
+          </p>
+        )}
+        {status === 'recording' && (
+          <p className="text-xs text-gray-400 text-center">
+            录音每 3 分钟自动分段处理，最长支持 2 小时
+          </p>
+        )}
+      </div>
     </div>
   );
 }

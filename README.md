@@ -5,12 +5,13 @@
 ## 功能
 
 - **录音转词云 + 课堂分析**：课堂录音 → 实时转文字 → 生成带权重词云 + AI课堂分析报告
-- **粘贴文稿转词云**：粘贴课堂文稿 → 生成词云 + AI课堂分析报告
+- **粘贴文稿转词云**：点击"会议记录"粘贴课堂文稿（最多 5000 字） → 生成词云 + AI课堂分析报告
 - **9大学科支持**：地理、历史、语文、数学、英语、物理、化学、生物、通用
-- **学科感知权重**：不同学科使用不同的关键词权重配置
+- **学科感知权重**：不同学科使用不同的关键词权重配置（学科术语 ×3，教育相关 ×2.5）
 - **AI课堂分析报告**：主要话题、教学脉络、反复强调的概念、教学建议
+- **导出课堂报告**：一键导出 PDF 格式的课堂分析报告
 - **流水线处理**：每 3 分钟自动分割音频，后台并行 ASR + LLM 处理
-- **词云例图**：录音结束后可查看词云例图参考
+- **蓝色主题词云**：椭圆形词云，蓝色渐变配色
 
 ## 快速开始
 
@@ -56,7 +57,7 @@ coze start
 ```
 src/
 ├── app/
-│   ├── page.tsx              # 主页面
+│   ├── page.tsx              # 主页面（Header/Banner/主体/Footer）
 │   ├── layout.tsx            # 布局组件
 │   └── api/
 │       ├── transcribe/       # ASR 转写 API
@@ -65,7 +66,12 @@ src/
 │   ├── MeetingRecorder.tsx   # 录音组件
 │   ├── TranscriptView.tsx    # 转写预览组件
 │   └── WordCloud.tsx         # 词云组件
-└── hooks/
-    ├── useSilenceDetection.ts
-    └── use-mobile.ts
+├── hooks/
+│   ├── useSilenceDetection.ts
+│   └── use-mobile.ts
+└── lib/
+    └── utils.ts
+
+public/
+└── wordcloud-example.png     # 词云例图占位
 ```

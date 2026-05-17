@@ -164,8 +164,8 @@ export function WordCloud({ processedResults = [], onReset, onChartReady }: Word
       </div>
 
       {/* 词云图 */}
-      <div className="flex-1 p-4 min-h-0">
-        <div ref={chartRef} className="w-full h-full" style={{ minHeight: '360px' }} />
+      <div className="flex-1 p-4 min-h-0 flex items-center justify-center">
+        <div ref={chartRef} className="w-full aspect-square" style={{ maxHeight: '480px' }} />
       </div>
     </div>
   );

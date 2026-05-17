@@ -65,7 +65,7 @@ export function WordCloud({ processedResults = [], onReset, onChartReady }: Word
       },
       series: [{
         type: 'wordCloud',
-        shape: 'ellipse',
+        shape: 'circle',
         left: 'center',
         top: 'center',
         width: '90%',

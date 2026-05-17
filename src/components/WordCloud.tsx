@@ -65,7 +65,7 @@ export function WordCloud({ processedResults = [], onReset, onChartReady }: Word
       },
       series: [{
         type: 'wordCloud',
-        shape: 'ellipse',
+        shape: 'circle',
         left: 'center',
         top: 'center',
         width: '90%',
@@ -165,12 +165,7 @@ export function WordCloud({ processedResults = [], onReset, onChartReady }: Word
 
       {/* 词云图 */}
       <div className="flex-1 p-4 min-h-0 flex items-center justify-center">
-        <div ref={chartRef} 
-  style={{ 
-    width: '100%', 
-    aspectRatio: '16 / 9',   // ✅ 关键：固定宽高比为16:9
-    minHeight: '300px',
-    maxHeight: '500px', }}/>
+        <div ref={chartRef} className="w-full aspect-square" style={{ maxHeight: '480px' }} />
       </div>
     </div>
   );
